@@ -1,0 +1,22 @@
+# cargo-release configuration. The actual release flow lives in
+# .claude/skills/release/; this file pins the mechanical knobs so the skill
+# does not hardcode them.
+
+# Sign tags so the crates.io release is attributable to the maintainer.
+sign-tag = true
+sign-commit = true
+
+# Tag format matches the `v<version>` convention announced in CLAUDE.md.
+tag-prefix = ""
+tag-name = "v{{version}}"
+
+# Stay on the publishing branch; the skill handles branch hygiene explicitly.
+push = false
+publish = false
+
+# Pre-release replacements keep PROTOCOL_VERSION in lockstep with the crate
+# version. The skill verifies this invariant; the replacement here is a
+# belt-and-suspenders guard in case someone runs `cargo release` directly.
+pre-release-replacements = [
+    { file = "src/lib.rs", search = 'pub const PROTOCOL_VERSION: &str = "[^"]+";', replace = 'pub const PROTOCOL_VERSION: &str = "{{version}}";' },
+]

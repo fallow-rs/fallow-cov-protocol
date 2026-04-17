@@ -34,7 +34,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Current protocol version. Bumped per spec rules above.
+/// Current protocol version. Bumped per the semver rules above.
 pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 // -- Request envelope -------------------------------------------------------
@@ -44,11 +44,15 @@ pub const PROTOCOL_VERSION: &str = "0.2.0";
 pub struct Request {
     /// Semver string of the protocol version this request targets.
     pub protocol_version: String,
+    /// License material the sidecar validates before running coverage analysis.
     pub license: License,
     /// Absolute path of the project root under analysis.
     pub project_root: String,
+    /// One or more coverage artifacts the sidecar should ingest.
     pub coverage_sources: Vec<CoverageSource>,
+    /// Static analysis output the public CLI already produced for this run.
     pub static_findings: StaticFindings,
+    /// Optional runtime knobs; all fields default to forward-compatible values.
     #[serde(default)]
     pub options: Options,
 }
@@ -65,30 +69,50 @@ pub struct License {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum CoverageSource {
     /// A single V8 `ScriptCoverage` JSON file.
-    V8 { path: String },
+    V8 {
+        /// Absolute path to the V8 coverage JSON file.
+        path: String,
+    },
     /// A single Istanbul JSON file.
-    Istanbul { path: String },
+    Istanbul {
+        /// Absolute path to the Istanbul coverage JSON file.
+        path: String,
+    },
     /// A directory containing multiple V8 dumps to merge in memory.
-    V8Dir { path: String },
+    V8Dir {
+        /// Absolute path to the directory containing V8 dump files.
+        path: String,
+    },
 }
 
 /// Static analysis output the public CLI already produced.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaticFindings {
+    /// One entry per source file the CLI analyzed.
     pub files: Vec<StaticFile>,
 }
 
+/// Static analysis results for a single source file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaticFile {
+    /// Path to the source file, relative to [`Request::project_root`].
     pub path: String,
+    /// Functions the CLI discovered in this file.
     pub functions: Vec<StaticFunction>,
 }
 
+/// Static analysis results for a single function within a [`StaticFile`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaticFunction {
+    /// Function identifier as reported by the static analyzer. May be an
+    /// anonymous placeholder (e.g. `"<anonymous>"`) when the source has no
+    /// name at the definition site.
     pub name: String,
+    /// 1-indexed line where the function body starts.
     pub start_line: u32,
+    /// 1-indexed line where the function body ends (inclusive).
     pub end_line: u32,
+    /// Cyclomatic complexity of the function, as computed by the CLI.
     pub cyclomatic: u32,
     /// Whether this function is statically referenced by the module graph.
     /// Drives [`Evidence::static_status`] and gates [`Verdict::SafeToDelete`].
@@ -105,8 +129,12 @@ pub struct StaticFunction {
 /// a breaking change.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Options {
+    /// When true the sidecar computes and returns [`Response::hot_paths`].
+    /// When false, hot-path computation is skipped entirely.
     #[serde(default)]
     pub include_hot_paths: bool,
+    /// Minimum invocation count a function must have to qualify as a hot path.
+    /// `None` defers to the sidecar's spec default.
     #[serde(default)]
     pub min_invocations_for_hot: Option<u64>,
     /// Minimum total trace volume before `safe_to_delete` / `review_required`
@@ -141,16 +169,25 @@ pub struct Options {
 /// Emitted by the sidecar to stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
+    /// Semver string of the protocol version the sidecar produced.
     pub protocol_version: String,
+    /// Top-level report verdict summarizing the overall state of the run.
     pub verdict: ReportVerdict,
+    /// Aggregate statistics across the whole analysis.
     pub summary: Summary,
+    /// Per-function findings, one entry per observed or tracked function.
     pub findings: Vec<Finding>,
+    /// Hot-path findings, populated only when [`Options::include_hot_paths`]
+    /// was set on the request. Defaults to empty.
     #[serde(default)]
     pub hot_paths: Vec<HotPath>,
+    /// Grace-period watermark the CLI should render in human output, if any.
     #[serde(default)]
     pub watermark: Option<Watermark>,
+    /// Non-fatal errors the sidecar emitted while processing the request.
     #[serde(default)]
     pub errors: Vec<DiagnosticMessage>,
+    /// Warnings the sidecar emitted while processing the request.
     #[serde(default)]
     pub warnings: Vec<DiagnosticMessage>,
 }
@@ -161,15 +198,22 @@ pub struct Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReportVerdict {
+    /// No action required — production coverage confirms the codebase.
     Clean,
+    /// One or more hot paths need attention (regression / drift).
     HotPathChangesNeeded,
+    /// At least one finding indicates cold code that should be removed or
+    /// reviewed.
     ColdCodeDetected,
+    /// The license JWT has expired but the sidecar is still operating inside
+    /// the configured grace window. Output is advisory.
     LicenseExpiredGrace,
     /// Sentinel for forward-compatibility with newer sidecars.
     #[serde(other)]
     Unknown,
 }
 
+/// Aggregate statistics describing the observed coverage dump.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Summary {
     /// Number of functions the sidecar could observe in the V8 dump.
@@ -191,12 +235,16 @@ pub struct Summary {
     pub deployments_seen: u32,
 }
 
+/// A per-function finding combining static analysis and runtime coverage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
     /// Deterministic content hash of shape `fallow:prod:<hash>`. See
     /// [`finding_id`] for the canonical helper.
     pub id: String,
+    /// Path to the source file, relative to [`Request::project_root`].
     pub file: String,
+    /// Function name as reported by the static analyzer. Matches
+    /// [`StaticFunction::name`].
     pub function: String,
     /// 1-indexed line number the function starts on. Included in the ID hash
     /// so anonymous functions with identical names but different locations
@@ -208,8 +256,11 @@ pub struct Finding {
     /// Raw invocation count from the V8 dump. `None` when the function was
     /// not tracked (lazy-parsed, worker-thread isolate, etc.).
     pub invocations: Option<u64>,
+    /// Confidence the sidecar has in this finding's [`Finding::verdict`].
     pub confidence: Confidence,
+    /// Evidence rows the sidecar used to arrive at the finding.
     pub evidence: Evidence,
+    /// Machine-readable next-step hints for AI agents.
     #[serde(default)]
     pub actions: Vec<Action>,
 }
@@ -236,17 +287,25 @@ pub enum Verdict {
     Unknown,
 }
 
+/// Confidence the sidecar attaches to a [`Finding::verdict`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     /// Combined static + runtime signal: statically unused AND tracked AND
     /// zero invocations. Strongest delete signal the sidecar emits.
     VeryHigh,
+    /// Strong signal — one of static or runtime is dispositive, the other
+    /// agrees.
     High,
+    /// Signals agree but observation volume or coverage fidelity tempers the
+    /// call.
     Medium,
+    /// Weak signal — a single data point suggests the verdict but other
+    /// evidence is missing or ambiguous.
     Low,
     /// Explicit absence of confidence (e.g. coverage unavailable).
     None,
+    /// Sentinel for forward-compatibility.
     #[serde(other)]
     Unknown,
 }
@@ -273,14 +332,19 @@ pub struct Evidence {
     pub deployments_observed: u32,
 }
 
+/// A function the sidecar identified as a hot path in the current dump.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotPath {
     /// Deterministic content hash of shape `fallow:hot:<hash>`. See
     /// [`hot_path_id`] for the canonical helper.
     pub id: String,
+    /// Path to the source file, relative to [`Request::project_root`].
     pub file: String,
+    /// Function name as reported by the static analyzer.
     pub function: String,
+    /// 1-indexed line the function starts on.
     pub line: u32,
+    /// Raw invocation count from the V8 dump.
     pub invocations: u64,
     /// Percentile rank of this function's invocation count over the
     /// invocation distribution of the current response's hot paths. `100`
@@ -291,8 +355,12 @@ pub struct HotPath {
 /// Machine-readable next-step hint for AI agents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
+    /// Short identifier for the action kind (e.g. `"delete"`, `"inline"`,
+    /// `"review"`). Free-form on the wire to keep forward compatibility.
     pub kind: String,
+    /// Human-readable one-liner describing the suggested action.
     pub description: String,
+    /// Whether the CLI can apply this action non-interactively.
     #[serde(default)]
     pub auto_fixable: bool,
 }
@@ -301,8 +369,12 @@ pub struct Action {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Watermark {
+    /// The trial period has ended.
     TrialExpired,
+    /// A paid license has expired but the sidecar is still inside the grace
+    /// window.
     LicenseExpiredGrace,
+    /// Sentinel for forward-compatibility.
     #[serde(other)]
     Unknown,
 }
@@ -310,7 +382,9 @@ pub enum Watermark {
 /// Error / warning surfaced by the sidecar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticMessage {
+    /// Stable machine-readable diagnostic code (e.g. `"COV_DUMP_PARSE"`).
     pub code: String,
+    /// Human-readable description of the diagnostic.
     pub message: String,
 }
 
@@ -337,6 +411,9 @@ pub fn hot_path_id(file: &str, function: &str, line: u32) -> String {
     format!("fallow:hot:{}", content_hash(file, function, line, "hot"))
 }
 
+/// Canonical content hash shared by the stable ID helpers. The input order
+/// (file, function, line, kind) and truncation (first 4 SHA-256 bytes → 8 hex
+/// chars) are part of the wire contract; see [`finding_id`] for the rationale.
 fn content_hash(file: &str, function: &str, line: u32, kind: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(file.as_bytes());
@@ -344,10 +421,19 @@ fn content_hash(file: &str, function: &str, line: u32, kind: &str) -> String {
     hasher.update(line.to_string().as_bytes());
     hasher.update(kind.as_bytes());
     let digest = hasher.finalize();
+    hex_prefix(&digest)
+}
+
+/// Encode the first four bytes of `digest` as lowercase hex — exactly eight
+/// characters. Kept separate so the truncation length is easy to audit. Total
+/// by construction: `HEX` is ASCII and `char::from(u8)` is infallible, so the
+/// helper never panics.
+fn hex_prefix(digest: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(8);
-    for byte in digest.iter().take(4) {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{byte:02x}");
+    for &byte in digest.iter().take(4) {
+        out.push(char::from(HEX[usize::from(byte >> 4)]));
+        out.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     out
 }
@@ -361,11 +447,15 @@ fn content_hash(file: &str, function: &str, line: u32, kind: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Feature {
+    /// Production coverage intelligence (the primary sidecar feature).
     ProductionCoverage,
-    // Deferred to later phases:
+    /// Portfolio dashboard for cross-project rollups. Deferred.
     PortfolioDashboard,
+    /// MCP cloud tools integration. Deferred.
     McpCloudTools,
+    /// Cross-repo aggregation and deduplication. Deferred.
     CrossRepoAggregation,
+    /// Sentinel for forward-compatibility.
     #[serde(other)]
     Unknown,
 }
@@ -405,6 +495,13 @@ mod tests {
         let json = r#""future_feature""#;
         let feature: Feature = serde_json::from_str(json).unwrap();
         assert!(matches!(feature, Feature::Unknown));
+    }
+
+    #[test]
+    fn unknown_watermark_round_trips() {
+        let json = r#""something-else""#;
+        let watermark: Watermark = serde_json::from_str(json).unwrap();
+        assert!(matches!(watermark, Watermark::Unknown));
     }
 
     #[test]
@@ -473,6 +570,18 @@ mod tests {
         assert_ne!(
             finding_id("src/a.ts", "foo", 42),
             finding_id("src/a.ts", "bar", 42),
+        );
+    }
+
+    #[test]
+    fn finding_id_is_lowercase_hex_ascii() {
+        // Canonical form is lowercase hex — downstream dedup keys on string
+        // equality, so an accidental uppercase switch would break persisted IDs.
+        let id = finding_id("src/a.ts", "foo", 42);
+        let hash = &id["fallow:prod:".len()..];
+        assert!(
+            hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "expected lowercase hex, got {hash}"
         );
     }
 

@@ -1,0 +1,13 @@
+# Maximum nesting depth before clippy::excessive_nesting fires.
+excessive-nesting-threshold = 7
+
+# Unit size — functions above this LOC count are flagged. The contract types in
+# this crate are small by design; the ceiling exists to catch drift early.
+too-many-lines-threshold = 150
+
+# Parameter count ceiling — every wire type is a struct, so this is really a
+# guard on helper functions like the ID hashers.
+too-many-arguments-threshold = 7
+
+# Cognitive complexity ceiling — clippy default, matches SIG's 4-star threshold.
+cognitive-complexity-threshold = 25
