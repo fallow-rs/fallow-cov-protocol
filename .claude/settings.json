@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if jq -r '.tool_input.command' | grep -q '^git commit'; then cargo fmt --all 2>/dev/null; typos 2>/dev/null; fi",
+            "statusMessage": "Pre-commit: formatting and typo check..."
+          }
+        ]
+      }
+    ]
+  }
+}
