@@ -23,6 +23,11 @@
 //! per-function verdict and nullable invocation count. [`Confidence`]
 //! gained `VeryHigh` and `None` variants to match the decision table in
 //! `.internal/spec-production-coverage.md`.
+//!
+//! [`StaticFunction::static_used`] and [`StaticFunction::test_covered`] are
+//! intentionally required (no `#[serde(default)]`) — a silent default would
+//! hide every `safe_to_delete` finding, so 0.1-shape requests must fail
+//! deserialization instead of parsing into a wrong answer.
 
 #![forbid(unsafe_code)]
 
@@ -456,6 +461,22 @@ mod tests {
     }
 
     #[test]
+    fn finding_id_changes_with_file() {
+        assert_ne!(
+            finding_id("src/a.ts", "foo", 42),
+            finding_id("src/b.ts", "foo", 42),
+        );
+    }
+
+    #[test]
+    fn finding_id_changes_with_function() {
+        assert_ne!(
+            finding_id("src/a.ts", "foo", 42),
+            finding_id("src/a.ts", "bar", 42),
+        );
+    }
+
+    #[test]
     fn evidence_round_trips_with_untracked_reason() {
         let evidence = Evidence {
             static_status: "used".to_owned(),
@@ -478,11 +499,26 @@ mod tests {
         // which would hide every safe_to_delete finding.
         let json = r#"{"name":"foo","start_line":1,"end_line":2,"cyclomatic":1}"#;
         let result: Result<StaticFunction, _> = serde_json::from_str(json);
-        let err = result.expect_err("missing static_used / test_covered must fail").to_string();
+        let err = result
+            .expect_err("missing static_used / test_covered must fail")
+            .to_string();
         assert!(
             err.contains("static_used") || err.contains("test_covered"),
             "unexpected error text: {err}"
         );
+    }
+
+    #[test]
+    fn options_defaults_when_fields_omitted() {
+        let json = "{}";
+        let options: Options = serde_json::from_str(json).unwrap();
+        assert!(!options.include_hot_paths);
+        assert!(options.min_invocations_for_hot.is_none());
+        assert!(options.min_observation_volume.is_none());
+        assert!(options.low_traffic_threshold.is_none());
+        assert!(options.trace_count.is_none());
+        assert!(options.period_days.is_none());
+        assert!(options.deployments_seen.is_none());
     }
 
     #[test]
