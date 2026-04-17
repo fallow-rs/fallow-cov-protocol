@@ -1,10 +1,26 @@
 name: CI
 
+# CI BUDGET NOTE (temporary):
+# The account is near its Actions minute quota. Per-push/PR CI is trimmed to
+# ubuntu-latest only; the macOS + Windows matrix entries, MSRV job, and
+# publish-dry-run are gated behind `workflow_dispatch` and must be run
+# manually (Actions tab → "Run workflow") or locally before a release:
+#
+#   cargo test --all-targets
+#   cargo clippy --all-targets -- -D warnings
+#   cargo fmt --all -- --check
+#   cargo +1.75.0 check --all-targets        # MSRV
+#   cargo publish --dry-run                  # before tagging
+#
+# Revert to per-push by removing the `if:` gates below and restoring the
+# full matrix once the quota resets.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions: {}
 
@@ -25,7 +41,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # ubuntu is always included; macOS (10x billing) and Windows (2x) only
+        # on manual dispatch while the Actions quota is tight.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -115,6 +133,9 @@ jobs:
 
   msrv:
     name: MSRV (1.75)
+    # Temporarily manual-only to stay under the Actions quota; run locally via
+    # `cargo +1.75.0 check --all-targets` before merging MSRV-sensitive changes.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -132,6 +153,9 @@ jobs:
 
   publish-dry-run:
     name: Publish (dry run)
+    # Manual-only while the Actions quota is tight; the release skill runs
+    # `cargo publish --dry-run` locally before tagging.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -156,7 +180,7 @@ jobs:
           RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
           for result in $(echo "$RESULTS" | jq -r '.[]'); do
-            if [ "$result" != "success" ]; then
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::Job failed with result: $result"
               exit 1
             fi
