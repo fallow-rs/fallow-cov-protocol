@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 
 // -- Request envelope -------------------------------------------------------
 
@@ -162,6 +162,18 @@ pub struct Options {
     /// [`Evidence::deployments_observed`].
     #[serde(default)]
     pub deployments_seen: Option<u32>,
+    /// Total observation window in seconds. Finer-grained than
+    /// [`Self::period_days`]; used to populate
+    /// [`CaptureQuality::window_seconds`]. When `None` the sidecar falls back
+    /// to `period_days * 86_400`. Added in protocol 0.3.0.
+    #[serde(default)]
+    pub window_seconds: Option<u64>,
+    /// Number of distinct production instances that contributed coverage.
+    /// Used to populate [`CaptureQuality::instances_observed`]. When `None`
+    /// the sidecar falls back to [`Self::deployments_seen`]. Added in
+    /// protocol 0.3.0.
+    #[serde(default)]
+    pub instances_observed: Option<u32>,
 }
 
 // -- Response envelope ------------------------------------------------------
@@ -233,6 +245,55 @@ pub struct Summary {
     pub period_days: u32,
     /// Distinct deployments contributing to the supplied dump.
     pub deployments_seen: u32,
+    /// Quality of the capture window. Populated by the sidecar so the CLI
+    /// can render a "short window" warning alongside low-confidence verdicts,
+    /// and so the upgrade prompt can quantify the delta cloud mode would
+    /// provide. Optional for forward compatibility with 0.2.x sidecars;
+    /// 0.3.x always sets it. Added in protocol 0.3.0 per ADR 009 step 6b.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_quality: Option<CaptureQuality>,
+}
+
+/// Capture-quality telemetry surfaced alongside the aggregate summary.
+///
+/// First-touch local-mode captures (`fallow health --production-coverage-dir`)
+/// tend to produce short windows (minutes to an hour) against a single
+/// instance. Lazy-parsed scripts do not appear in V8 dumps unless they
+/// actually executed during the capture window, which a first-time user
+/// will read as "the tool is broken" rather than "the capture window is
+/// too short." This struct gives the CLI enough information to explain the
+/// state honestly and to quantify what continuous cloud monitoring would add.
+///
+/// Added in protocol 0.3.0 per ADR 009 step 6b, deliverable 2 of 3.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaptureQuality {
+    /// Total observation window in seconds. Finer-grained than
+    /// [`Summary::period_days`], which rounds up to whole days. A 12-minute
+    /// local capture reports `window_seconds: 720` and `period_days: 1`.
+    pub window_seconds: u64,
+    /// Number of distinct production instances that contributed to the
+    /// dump. Matches [`Summary::deployments_seen`] in the typical case but
+    /// is emitted separately so future captures can distinguish "one
+    /// deployment seen across many instances" from "many deployments".
+    pub instances_observed: u32,
+    /// True when the untracked-function ratio exceeds
+    /// [`Self::LAZY_PARSE_THRESHOLD_PERCENT`]. Signals that the CLI should
+    /// render a "short window" warning: many functions appearing as
+    /// untracked most likely reflect lazy-parsed code rather than
+    /// unreachable code, and the capture window is not long enough to
+    /// distinguish the two.
+    pub lazy_parse_warning: bool,
+    /// `functions_untracked / functions_tracked` as a percentage. Rounded
+    /// to two decimal places for JSON reproducibility. Provided so the CLI
+    /// can render the exact ratio that triggered the warning.
+    pub untracked_ratio_percent: f64,
+}
+
+impl CaptureQuality {
+    /// Threshold above which [`Self::lazy_parse_warning`] fires. Chosen so
+    /// a short window (minutes) against a typical Node app trips the
+    /// warning, while a multi-day continuous capture does not.
+    pub const LAZY_PARSE_THRESHOLD_PERCENT: f64 = 30.0;
 }
 
 /// A per-function finding combining static analysis and runtime coverage.
@@ -465,8 +526,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_constant_is_v0_2() {
-        assert!(PROTOCOL_VERSION.starts_with("0.2."));
+    fn version_constant_is_v0_3() {
+        assert!(PROTOCOL_VERSION.starts_with("0.3."));
     }
 
     #[test]
@@ -540,6 +601,68 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.starts_with("fallow:prod:"));
         assert_eq!(first.len(), "fallow:prod:".len() + 8);
+    }
+
+    #[test]
+    fn capture_quality_round_trips() {
+        let q = CaptureQuality {
+            window_seconds: 720,
+            instances_observed: 1,
+            lazy_parse_warning: true,
+            untracked_ratio_percent: 42.5,
+        };
+        let json = serde_json::to_string(&q).unwrap();
+        let parsed: CaptureQuality = serde_json::from_str(&json).unwrap();
+        assert_eq!(q, parsed);
+    }
+
+    #[test]
+    fn summary_without_capture_quality_deserializes() {
+        // 0.2.x sidecars produced this shape; 0.3.x deserialization must
+        // still accept it so a mixed rollout (newer CLI, older sidecar)
+        // does not hard-fail.
+        let json = r#"{
+            "functions_tracked": 10,
+            "functions_hit": 5,
+            "functions_unhit": 5,
+            "functions_untracked": 0,
+            "coverage_percent": 50.0,
+            "trace_count": 100,
+            "period_days": 1,
+            "deployments_seen": 1
+        }"#;
+        let summary: Summary = serde_json::from_str(json).unwrap();
+        assert!(summary.capture_quality.is_none());
+    }
+
+    #[test]
+    fn summary_with_capture_quality_round_trips() {
+        let summary = Summary {
+            functions_tracked: 10,
+            functions_hit: 5,
+            functions_unhit: 5,
+            functions_untracked: 3,
+            coverage_percent: 50.0,
+            trace_count: 100,
+            period_days: 1,
+            deployments_seen: 1,
+            capture_quality: Some(CaptureQuality {
+                window_seconds: 720,
+                instances_observed: 1,
+                lazy_parse_warning: true,
+                untracked_ratio_percent: 30.0,
+            }),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let parsed: Summary = serde_json::from_str(&json).unwrap();
+        assert_eq!(summary.capture_quality, parsed.capture_quality);
+    }
+
+    #[test]
+    fn lazy_parse_threshold_is_30_percent() {
+        // Anchored so a bump forces a deliberate decision and a CHANGELOG
+        // entry rather than a silent tweak.
+        assert!((CaptureQuality::LAZY_PARSE_THRESHOLD_PERCENT - 30.0).abs() < f64::EPSILON);
     }
 
     #[test]

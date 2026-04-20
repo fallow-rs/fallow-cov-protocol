@@ -7,6 +7,26 @@ crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 `.claude/rules/protocol-versioning.md` for the full policy.
 
+## [0.3.0] - 2026-04-20
+
+### Added
+
+- **`Summary.capture_quality: Option<CaptureQuality>`** (ADR 009 step 6b,
+  deliverable 2 of 3). Surfaces `{ window_seconds, instances_observed,
+  lazy_parse_warning, untracked_ratio_percent }` so the CLI can render a
+  "short window" warning alongside low-confidence verdicts and quantify
+  the delta continuous cloud monitoring would provide. Optional for
+  forward-compatibility with 0.2.x sidecars; 0.3.x always sets it.
+- `CaptureQuality::LAZY_PARSE_THRESHOLD_PERCENT = 30.0`. Untracked ratio
+  above this threshold trips the lazy-parse warning.
+- `Options.window_seconds: Option<u64>` and `Options.instances_observed:
+  Option<u32>`. Finer-grained inputs for `CaptureQuality`; both fall back
+  to existing `period_days`/`deployments_seen` when `None`.
+
+### Changed
+
+- `PROTOCOL_VERSION` bumped to `"0.3.0"`.
+
 ## [Unreleased]
 
 ### Added
