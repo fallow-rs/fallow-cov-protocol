@@ -1,0 +1,177 @@
+name: Release fallow-cov-protocol
+
+# Triggered by `v*` tags. Runs tests + clippy + fmt + dry-run, then publishes
+# to crates.io using a repo-scoped CARGO_REGISTRY_TOKEN secret. Also cuts a
+# GitHub release with the CHANGELOG slice attached.
+#
+# One-time setup (before the first tag push):
+#   gh secret set CARGO_REGISTRY_TOKEN --repo fallow-rs/fallow-cov-protocol
+# The token can be the same one used by the fallow repo; both publish under
+# the same crates.io owner.
+#
+# Re-running after a failure: push a new patch tag (e.g. v0.3.1). NEVER
+# force-push a release tag. Every pushed tag is a permanent audit trail.
+#
+# Security note: all workflow inputs (tag names, refs) are routed through
+# `env:` vars before shell use, so a malicious tag name cannot inject
+# commands. See https://github.blog/security/vulnerability-research/how-to-
+# catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to re-run the release for (e.g. v0.3.0)"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # for GitHub release
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # On workflow_dispatch the caller supplies a tag; on tag-push the
+          # ref already points at it. Either way checkout by the resolved
+          # ref so downstream steps always see the release tree.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        env:
+          REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Normalise "refs/tags/v0.3.0" and "v0.3.0" to "0.3.0".
+          TAG="${REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::tag '${TAG}' does not match v<semver> format"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        env:
+          TAG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PKG_VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag v${TAG_VERSION} does not match Cargo.toml version ${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Tag and manifest agree on ${PKG_VERSION}"
+
+      - name: Verify PROTOCOL_VERSION matches Cargo.toml version
+        shell: bash
+        env:
+          TAG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The protocol-reviewer agent guards this invariant at PR time;
+          # the release workflow re-checks so a tag pushed against a stale
+          # lib.rs cannot reach crates.io.
+          LIB_VERSION=$(grep -oE 'PROTOCOL_VERSION: &str = "[^"]+"' src/lib.rs | cut -d'"' -f2)
+          if [ "$LIB_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::PROTOCOL_VERSION \"${LIB_VERSION}\" in src/lib.rs does not match tag v${TAG_VERSION}"
+            exit 1
+          fi
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: release
+
+      - name: Run tests
+        run: cargo test --all-targets
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Cargo publish dry-run
+        run: cargo publish --dry-run
+
+      - name: Check if version is already published on crates.io
+        id: check_published
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "https://crates.io/api/v1/crates/fallow-cov-protocol/${VERSION}")
+          if [ "$STATUS" = "200" ]; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::fallow-cov-protocol ${VERSION} is already on crates.io; skipping cargo publish"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to crates.io
+        if: steps.check_published.outputs.already != 'true'
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
+
+      - name: Extract CHANGELOG slice for this version
+        id: changelog
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # CHANGELOG uses `## [X.Y.Z] - YYYY-MM-DD` headers (Keep a
+          # Changelog). Print lines from the matching section up to (but
+          # not including) the next `## ` header.
+          awk -v ver="${VERSION}" '
+            /^## / {
+              if (found) exit
+              if ($0 ~ "^## \\["ver"\\]") { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > /tmp/changelog-slice.md
+          {
+            echo "title=fallow-cov-protocol ${TAG}"
+            echo "body<<CHANGELOG_EOF"
+            cat /tmp/changelog-slice.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "Install: \`cargo add fallow-cov-protocol@${VERSION}\`"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          name: ${{ steps.changelog.outputs.title }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
