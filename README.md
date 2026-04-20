@@ -7,7 +7,7 @@ Versioned JSON envelope types shared between the public [`fallow`](https://githu
 
 ## Why this crate exists
 
-Production Coverage Intelligence in fallow is a two-binary architecture: the open-source CLI handles static analysis and IO; a separate paid sidecar does V8-to-Istanbul normalization, three-state tracking, and combined scoring. Both sides marshal data through JSON on stdin/stdout. This crate is the single source of truth for that envelope so the two repositories cannot drift.
+Fallow Runtime, the paid runtime intelligence layer for fallow, is a two-binary architecture. The open-source [`fallow`](https://github.com/fallow-rs/fallow) CLI handles static analysis and IO. A separate closed-source sidecar (`fallow-cov`) does V8-to-Istanbul normalization, three-state tracking, and combined scoring. Both sides marshal data through JSON on stdin/stdout. This crate is the single source of truth for that envelope so the two repositories cannot drift.
 
 ## Versioning
 
