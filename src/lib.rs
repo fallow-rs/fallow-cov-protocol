@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+pub const PROTOCOL_VERSION: &str = "0.4.0";
 
 // -- Request envelope -------------------------------------------------------
 
@@ -123,6 +123,15 @@ pub struct StaticFunction {
     /// Drives [`Evidence::test_coverage`]. Required for the same reason as
     /// [`StaticFunction::static_used`].
     pub test_covered: bool,
+    /// Static caller count supplied by the CLI's module graph. Added in 0.4.0
+    /// for first-class blast-radius output; defaults to zero for older CLIs.
+    #[serde(default)]
+    pub caller_count: u32,
+    /// CODEOWNERS owner count for the containing file. `None` means no
+    /// CODEOWNERS data was available; `Some(0)` means CODEOWNERS exists but
+    /// no rule matched this file. Added in 0.4.0 for importance scoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_count: Option<u32>,
 }
 
 /// Runtime knobs. All fields are optional so new options can be added without
@@ -193,6 +202,12 @@ pub struct Response {
     /// was set on the request. Defaults to empty.
     #[serde(default)]
     pub hot_paths: Vec<HotPath>,
+    /// First-class blast-radius findings. Added in protocol 0.4.0.
+    #[serde(default)]
+    pub blast_radius: Vec<BlastRadiusEntry>,
+    /// First-class runtime importance findings. Added in protocol 0.4.0.
+    #[serde(default)]
+    pub importance: Vec<ImportanceEntry>,
     /// Grace-period watermark the CLI should render in human output, if any.
     #[serde(default)]
     pub watermark: Option<Watermark>,
@@ -413,6 +428,67 @@ pub struct HotPath {
     pub percentile: u8,
 }
 
+/// Risk band for a blast-radius entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskBand {
+    /// Low caller fan-in / traffic-weighted reach.
+    Low,
+    /// Moderate caller fan-in / traffic-weighted reach.
+    Medium,
+    /// High caller fan-in / traffic-weighted reach.
+    High,
+}
+
+/// A function with meaningful static or traffic-weighted blast radius.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlastRadiusEntry {
+    /// Deterministic content hash of shape `fallow:blast:<hash>`.
+    pub id: String,
+    /// Path to the source file, relative to [`Request::project_root`].
+    pub file: String,
+    /// Function name as reported by the static analyzer.
+    pub function: String,
+    /// 1-indexed line the function starts on.
+    pub line: u32,
+    /// Static caller count supplied by the CLI module graph.
+    pub caller_count: u32,
+    /// Caller count weighted by observed traffic. Local mode uses the
+    /// sidecar's current best-effort traffic proxy; cloud mode may replace
+    /// this with summed caller invocations.
+    pub caller_count_weighted_by_traffic: u64,
+    /// Distinct git SHAs that touched this function in the observation window.
+    /// Cloud-only; omitted for local coverage artifacts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deploys_touched: Option<u32>,
+    /// Deterministic low / medium / high band.
+    pub risk_band: RiskBand,
+}
+
+/// A function ranked by runtime traffic, complexity, and ownership risk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportanceEntry {
+    /// Deterministic content hash of shape `fallow:importance:<hash>`.
+    pub id: String,
+    /// Path to the source file, relative to [`Request::project_root`].
+    pub file: String,
+    /// Function name as reported by the static analyzer.
+    pub function: String,
+    /// 1-indexed line the function starts on.
+    pub line: u32,
+    /// Raw invocation count used for the traffic component.
+    pub invocations: u64,
+    /// Cyclomatic complexity supplied by the CLI health pipeline.
+    pub cyclomatic: u32,
+    /// Number of CODEOWNERS owners; `0` means ownership is absent or unowned.
+    pub owner_count: u32,
+    /// 0-100 importance score. The formula is intentionally simple and
+    /// documented by the sidecar implementation so it can be tuned later.
+    pub importance_score: f64,
+    /// Templated one-sentence explanation, not free-form model text.
+    pub reason: String,
+}
+
 /// Machine-readable next-step hint for AI agents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
@@ -472,6 +548,24 @@ pub fn hot_path_id(file: &str, function: &str, line: u32) -> String {
     format!("fallow:hot:{}", content_hash(file, function, line, "hot"))
 }
 
+/// Compute the deterministic [`BlastRadiusEntry::id`] for a blast-radius entry.
+#[must_use]
+pub fn blast_radius_id(file: &str, function: &str, line: u32) -> String {
+    format!(
+        "fallow:blast:{}",
+        content_hash(file, function, line, "blast")
+    )
+}
+
+/// Compute the deterministic [`ImportanceEntry::id`] for an importance entry.
+#[must_use]
+pub fn importance_id(file: &str, function: &str, line: u32) -> String {
+    format!(
+        "fallow:importance:{}",
+        content_hash(file, function, line, "importance")
+    )
+}
+
 /// Canonical content hash shared by the stable ID helpers. The input order
 /// (file, function, line, kind) and truncation (first 4 SHA-256 bytes → 8 hex
 /// chars) are part of the wire contract; see [`finding_id`] for the rationale.
@@ -526,8 +620,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_constant_is_v0_3() {
-        assert!(PROTOCOL_VERSION.starts_with("0.3."));
+    fn version_constant_is_v0_4() {
+        assert!(PROTOCOL_VERSION.starts_with("0.4."));
     }
 
     #[test]
@@ -751,6 +845,30 @@ mod tests {
         assert!(options.trace_count.is_none());
         assert!(options.period_days.is_none());
         assert!(options.deployments_seen.is_none());
+    }
+
+    #[test]
+    fn stable_ids_are_distinct_by_kind() {
+        let finding = finding_id("src/a.ts", "foo", 42);
+        let hot = hot_path_id("src/a.ts", "foo", 42);
+        let blast = blast_radius_id("src/a.ts", "foo", 42);
+        let importance = importance_id("src/a.ts", "foo", 42);
+        assert!(blast.starts_with("fallow:blast:"));
+        assert!(importance.starts_with("fallow:importance:"));
+        assert_eq!(blast.len(), "fallow:blast:".len() + 8);
+        assert_eq!(importance.len(), "fallow:importance:".len() + 8);
+        let suffixes = [
+            &finding[finding.len() - 8..],
+            &hot[hot.len() - 8..],
+            &blast[blast.len() - 8..],
+            &importance[importance.len() - 8..],
+        ];
+        for (index, suffix) in suffixes.iter().enumerate() {
+            assert!(
+                suffixes.iter().skip(index + 1).all(|other| other != suffix),
+                "ID suffix collision across finding kinds"
+            );
+        }
     }
 
     #[test]
