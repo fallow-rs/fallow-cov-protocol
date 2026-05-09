@@ -28,6 +28,18 @@
 //! intentionally required (no `#[serde(default)]`) — a silent default would
 //! hide every `safe_to_delete` finding, so 0.1-shape requests must fail
 //! deserialization instead of parsing into a wrong answer.
+//!
+//! # 0.5 changes
+//!
+//! - [`HotPath`] gained an `end_line` field so consumers can match a hot
+//!   path against a PR diff at line granularity, not just file granularity.
+//!   The field is `#[serde(default)]` for forward-tolerance with 0.4-shape
+//!   sidecars; readers MUST treat a `0` value as a single-line range
+//!   (`line..=line`).
+//! - [`ReportVerdict::HotPathChangesNeeded`] was renamed to
+//!   [`ReportVerdict::HotPathTouched`]. The wire string changes from
+//!   `hot-path-changes-needed` to `hot-path-touched`. The verdict reads as
+//!   a state observation rather than an action item; it is informational.
 
 #![forbid(unsafe_code)]
 
@@ -35,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.4.0";
+pub const PROTOCOL_VERSION: &str = "0.5.0";
 
 // -- Request envelope -------------------------------------------------------
 
@@ -227,8 +239,12 @@ pub struct Response {
 pub enum ReportVerdict {
     /// No action required — production coverage confirms the codebase.
     Clean,
-    /// One or more hot paths need attention (regression / drift).
-    HotPathChangesNeeded,
+    /// At least one function in the change set is on a hot path. Reviewers
+    /// should pay extra attention to runtime-critical code touched by this
+    /// PR. Note: the verdict is informational; matching is line-overlap
+    /// against the diff when one is supplied, falling back to file-touch
+    /// when only filenames are available.
+    HotPathTouched,
     /// At least one finding indicates cold code that should be removed or
     /// reviewed.
     ColdCodeDetected,
@@ -420,6 +436,14 @@ pub struct HotPath {
     pub function: String,
     /// 1-indexed line the function starts on.
     pub line: u32,
+    /// 1-indexed line the function ends on (inclusive). Mirrors
+    /// [`StaticFunction::end_line`] from the request envelope so consumers
+    /// can match a hot path against a PR diff at line granularity, not just
+    /// file granularity. Older 0.4-shape sidecars omit this field; readers
+    /// that receive `0` MUST treat the hot path as a single-line range
+    /// (`line..=line`) rather than a span.
+    #[serde(default)]
+    pub end_line: u32,
     /// Raw invocation count from the V8 dump.
     pub invocations: u64,
     /// Percentile rank of this function's invocation count over the
@@ -620,8 +644,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_constant_is_v0_4() {
-        assert!(PROTOCOL_VERSION.starts_with("0.4."));
+    fn version_constant_is_v0_5() {
+        assert!(PROTOCOL_VERSION.starts_with("0.5."));
     }
 
     #[test]
