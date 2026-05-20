@@ -36,10 +36,38 @@
 //!   The field is `#[serde(default)]` for forward-tolerance with 0.4-shape
 //!   sidecars; readers MUST treat a `0` value as a single-line range
 //!   (`line..=line`).
-//! - [`ReportVerdict::HotPathChangesNeeded`] was renamed to
+//! - `ReportVerdict::HotPathChangesNeeded` was renamed to
 //!   [`ReportVerdict::HotPathTouched`]. The wire string changes from
 //!   `hot-path-changes-needed` to `hot-path-touched`. The verdict reads as
 //!   a state observation rather than an action item; it is informational.
+//!
+//! # 0.6 changes
+//!
+//! - New [`FunctionIdentity`] type and optional `identity` field threaded
+//!   through [`StaticFunction`], [`Finding`], [`HotPath`], [`BlastRadiusEntry`],
+//!   and [`ImportanceEntry`]. Becomes the canonical join key between the
+//!   CLI's static function inventory, V8 / Istanbul runtime coverage, test
+//!   coverage from `oxc-coverage-instrument`, source-map remapped findings,
+//!   and `fallow-cloud` aggregation when present. Older 0.5-shape envelopes
+//!   continue to deserialize with `identity: None`; consumers SHOULD prefer
+//!   `identity.stable_id` as the join key when present and fall back to the
+//!   legacy `file` + `function` + `line` triple otherwise.
+//! - New [`function_identity_id`] helper emitting `fallow:fn:<8 hex>`. The
+//!   helper hashes only `file + name + start_line + "function"` (NOT
+//!   columns) so producers with different positional fidelity (V8 byte
+//!   offsets vs Istanbul UTF-16 columns vs oxc spans) agree on the join
+//!   key for the same function. Columns survive on the wire as descriptive
+//!   metadata for same-line disambiguation in display.
+//! - New [`IdentityResolution`] enum with `Resolved` / `Fallback` /
+//!   `Unresolved` / `Unknown` variants. Lets cloud aggregation record per
+//!   function whether the identity came from a source-map lookup, a
+//!   line-only fallback, or remains unresolved.
+//! - [`StaticFunction`], [`Finding`], [`HotPath`], [`BlastRadiusEntry`],
+//!   and [`ImportanceEntry`] are now `#[non_exhaustive]`. This is a
+//!   one-time source-side break for downstream Rust consumers that
+//!   constructed these via struct literals (the wire shape is unchanged
+//!   and forward-compatible). Future field additions become pure additive
+//!   changes; the CHANGELOG calls out the migration path.
 
 #![forbid(unsafe_code)]
 
@@ -47,7 +75,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.5.0";
+pub const PROTOCOL_VERSION: &str = "0.6.0";
 
 // -- Request envelope -------------------------------------------------------
 
@@ -114,7 +142,14 @@ pub struct StaticFile {
 }
 
 /// Static analysis results for a single function within a [`StaticFile`].
+///
+/// Marked `#[non_exhaustive]` in 0.6.0: downstream Rust consumers must
+/// stop using struct-literal construction at the type's boundary
+/// (destructure-with-`..` for reads still works). No `Default` impl
+/// ships on this type. See CHANGELOG for the migration note. The wire
+/// shape is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StaticFunction {
     /// Function identifier as reported by the static analyzer. May be an
     /// anonymous placeholder (e.g. `"<anonymous>"`) when the source has no
@@ -144,6 +179,12 @@ pub struct StaticFunction {
     /// no rule matched this file. Added in 0.4.0 for importance scoring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_count: Option<u32>,
+    /// Canonical function identity introduced in 0.6.0. When present,
+    /// consumers SHOULD prefer [`FunctionIdentity::stable_id`] as the
+    /// cross-surface join key over the legacy `(file, name, start_line)`
+    /// triple. Optional for forward-compat with 0.5-shape CLIs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<FunctionIdentity>,
 }
 
 /// Runtime knobs. All fields are optional so new options can be added without
@@ -231,9 +272,11 @@ pub struct Response {
     pub warnings: Vec<DiagnosticMessage>,
 }
 
-/// Top-level report verdict (was `Verdict` in 0.1). Summarises the overall
-/// state of the run; per-finding verdicts live on [`Finding::verdict`].
-/// Unknown variants are forward-mapped to [`ReportVerdict::Unknown`].
+/// Top-level report verdict for a coverage analysis run.
+///
+/// Was `Verdict` in 0.1. Summarises the overall state of the run;
+/// per-finding verdicts live on [`Finding::verdict`]. Unknown variants
+/// are forward-mapped to [`ReportVerdict::Unknown`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReportVerdict {
@@ -328,15 +371,40 @@ impl CaptureQuality {
 }
 
 /// A per-function finding combining static analysis and runtime coverage.
+///
+/// Marked `#[non_exhaustive]` in 0.6.0: downstream Rust consumers must
+/// stop using struct-literal construction. The wire shape is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Finding {
     /// Deterministic content hash of shape `fallow:prod:<hash>`. See
-    /// [`finding_id`] for the canonical helper.
+    /// [`finding_id`] for the canonical helper. Continues to ship through
+    /// 0.6 alongside [`Finding::identity`].
+    ///
+    /// **`Finding::id` vs [`FunctionIdentity::stable_id`].** They serve
+    /// different join axes and must not be conflated:
+    ///
+    /// - `Finding::id` is the canonical **per-finding suppression key**.
+    ///   It hashes `file + function + line + "prod"`, so the same function
+    ///   produces a different `id` when its line changes. Agents writing
+    ///   suppression files / baselines / CI dedup state key on this
+    ///   value to suppress THIS specific finding, not every finding on
+    ///   the function.
+    /// - [`FunctionIdentity::stable_id`] is the canonical **cross-surface
+    ///   join key**. The same function gets ONE `stable_id` across
+    ///   findings, hot paths, blast-radius entries, and importance
+    ///   entries. Cloud aggregation, traffic-weighted ranking, and any
+    ///   "show me this function's history" join uses it.
+    ///
+    /// New agent suppression formats SHOULD write `identity.stable_id`
+    /// when present (stable across line moves) AND retain `Finding::id`
+    /// for backwards-compatibility with 0.5-era baselines. Readers MUST
+    /// accept both forms during the grace window.
     pub id: String,
     /// Path to the source file, relative to [`Request::project_root`].
     pub file: String,
     /// Function name as reported by the static analyzer. Matches
-    /// [`StaticFunction::name`].
+    /// [`StaticFunction::name`] and [`FunctionIdentity::name`].
     pub function: String,
     /// 1-indexed line number the function starts on. Included in the ID hash
     /// so anonymous functions with identical names but different locations
@@ -355,6 +423,11 @@ pub struct Finding {
     /// Machine-readable next-step hints for AI agents.
     #[serde(default)]
     pub actions: Vec<Action>,
+    /// Canonical function identity introduced in 0.6.0. Optional for
+    /// forward-compat with 0.5-shape sidecars. See [`FunctionIdentity`]
+    /// for the canonical join semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<FunctionIdentity>,
 }
 
 /// Per-finding verdict. Replaces the 0.1 `CallState` enum.
@@ -402,6 +475,185 @@ pub enum Confidence {
     Unknown,
 }
 
+/// How a [`FunctionIdentity`] was produced by the upstream coverage
+/// pipeline.
+///
+/// Lets `fallow-cloud` aggregation and the CLI distinguish "this identity
+/// was resolved through a source map" from "this is a best-effort
+/// line-only fallback" without inspecting the column / span fields
+/// directly. Added in protocol 0.6.0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentityResolution {
+    /// Identity was produced from a fully-resolved source location, e.g.
+    /// a source-map lookup succeeded for a bundled position, or a direct
+    /// AST traversal yielded byte-accurate columns.
+    Resolved,
+    /// Identity was constructed via a best-effort fallback after a more
+    /// precise resolution failed (missing source map, stale offsets, etc).
+    /// [`FunctionIdentity::stable_id`] is bit-identical to what a
+    /// [`IdentityResolution::Resolved`] producer would emit for the same
+    /// function (the hash inputs are `file` / `name` / `start_line`
+    /// only, none of which the fallback path loses); the confidence
+    /// delta is about the column / span metadata, not the join key
+    /// itself. Consumers that weight join confidence on this variant
+    /// SHOULD apply the weight to display / disambiguation logic
+    /// (column accuracy, source-map traceability), not to the join.
+    Fallback,
+    /// Identity could not be resolved beyond `file`, `name`, and
+    /// `start_line`; columns and `source_hash` are SHOULD-be-absent.
+    /// Consumers SHOULD ignore [`FunctionIdentity::start_column`],
+    /// [`FunctionIdentity::end_column`], and
+    /// [`FunctionIdentity::source_hash`] when `resolution ==
+    /// Unresolved`, even if a non-conforming producer populated them.
+    /// The protocol intentionally documents rather than enforces this
+    /// (a serde-time check would force every consumer to validate);
+    /// `unresolved_identity_with_columns_round_trips` locks the
+    /// document-but-tolerate stance.
+    Unresolved,
+    /// Sentinel for forward-compatibility with newer pipelines.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Canonical, versioned identity for a function.
+///
+/// Becomes the cross-surface join key between the OSS CLI's static
+/// function inventory, V8 / Istanbul runtime coverage, test coverage
+/// from `oxc-coverage-instrument`, source-map remapped findings, and
+/// `fallow-cloud` aggregation when present.
+///
+/// # Name aliasing
+///
+/// The `name` field carries the same value as [`StaticFunction::name`]
+/// and [`Finding::function`]. The three spellings exist for backwards
+/// compatibility with 0.5-and-earlier envelopes: [`Finding::function`]
+/// and the legacy `file` / `line` fields are preserved verbatim so
+/// display surfaces (CLI human output, SARIF, GitHub annotations) keep
+/// working unchanged. New code should read [`FunctionIdentity::name`]
+/// when the field is present.
+///
+/// # Column semantics (load-bearing)
+///
+/// [`FunctionIdentity::start_column`] and [`FunctionIdentity::end_column`]
+/// are **1-indexed UTF-16 column offsets, anchored at the function-body
+/// start** (matching Istanbul `fnMap[i].loc.start`, NOT `fnMap[i].decl.start`).
+/// Producers MUST normalize their native semantics to this anchor:
+///
+/// - **Istanbul producers** read `fnMap[i].loc.start.column` (already
+///   UTF-16, 0-indexed) and add 1.
+/// - **V8 producers** (`fallow-v8-coverage`, `oxc_coverage_v8`) map the
+///   function's `startOffset` byte offset to a UTF-16 column via the
+///   script text, then add 1.
+/// - **AST-based producers** (oxc spans) convert the `Span::start`
+///   byte offset to UTF-16 column, then add 1.
+///
+/// Pick **one** anchor and stick to it: producers picking different
+/// anchors for the same function would silently produce different
+/// `(start_line, start_column)` pairs for display, but they MUST still
+/// produce the same [`FunctionIdentity::stable_id`] because columns are
+/// intentionally NOT hashed (see below).
+///
+/// # Hash exclusion of columns
+///
+/// [`function_identity_id`] hashes only `file + name + start_line +
+/// "function"`. Columns, end positions, and `source_hash` are descriptive
+/// metadata for display and same-line disambiguation, but are NOT part of
+/// the hash. Rationale: V8 runtime dumps frequently lack column info,
+/// while Istanbul fnMap and oxc spans always have it. If columns were
+/// hashed, the same function observed by two producers with different
+/// fidelity would produce two different `stable_id` values and the
+/// cross-surface join would silently break.
+///
+/// Same-line functions remain distinguishable via the column metadata on
+/// the struct itself, just not via the `stable_id`. Cloud aggregation
+/// that needs to disambiguate same-line functions during display can use
+/// `(start_line, start_column)` as a secondary key once the stable join
+/// has happened.
+///
+/// # Resolution confidence
+///
+/// [`FunctionIdentity::resolution`] is required (not `Option`) so cloud
+/// aggregation can record how each identity was produced. See
+/// [`IdentityResolution`] for the variants.
+///
+/// Added in protocol 0.6.0.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FunctionIdentity {
+    /// Path to the source file, relative to [`Request::project_root`].
+    /// Matches the legacy `file` field on [`Finding`], [`HotPath`],
+    /// [`BlastRadiusEntry`], and [`ImportanceEntry`].
+    pub file: String,
+    /// Function name as reported by the producing pipeline. Matches
+    /// [`StaticFunction::name`] and [`Finding::function`].
+    pub name: String,
+    /// 1-indexed line where the function body starts. Matches
+    /// [`StaticFunction::start_line`] and the legacy `line` field on
+    /// findings / hot paths / blast-radius / importance entries.
+    pub start_line: u32,
+    /// 1-indexed UTF-16 column of the first character of the function
+    /// body (inclusive). Anchored at the function-body opening
+    /// (Istanbul `loc.start`, V8 mapped from byte offset via script
+    /// text, oxc `Span::start` mapped to UTF-16). Istanbul's
+    /// `loc.start.column` is 0-indexed inclusive, so producers MUST
+    /// add 1 when reading from Istanbul fnMap. V8 producers whose
+    /// `Coverage.takePreciseCoverage()` offsets originated from a
+    /// disk-loaded script source MUST decode the script through UTF-8
+    /// before counting UTF-16 code units; offsets from inline-string
+    /// scripts already speak UTF-16. Optional: older V8 dumps and
+    /// Istanbul artifacts without column data omit this field.
+    /// Descriptive metadata only; NOT part of
+    /// [`FunctionIdentity::stable_id`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_column: Option<u32>,
+    /// 1-indexed line where the function body ends (inclusive). Optional.
+    /// Mirrors [`StaticFunction::end_line`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    /// 1-indexed UTF-16 column of the last character of the function
+    /// body (inclusive). Same indexing and anchor conventions as
+    /// [`FunctionIdentity::start_column`]. Note: Istanbul's
+    /// `loc.end.column` is 0-indexed AND exclusive (the column AFTER
+    /// the last character), so the mapping from Istanbul to this field
+    /// is identity (`protocol_end_column = istanbul_end_column`): the
+    /// off-by-one between "0-indexed exclusive" and "1-indexed
+    /// inclusive" cancels. V8 and oxc producers MUST convert their
+    /// byte-offset / span-end to the same 1-indexed-inclusive
+    /// convention. Optional. Descriptive metadata only; NOT part of
+    /// [`FunctionIdentity::stable_id`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<u32>,
+    /// Optional content hash of the function source body, useful as a
+    /// tiebreaker for moved or renamed functions whose positions changed
+    /// but whose source is identical. Format is producer-defined; the
+    /// protocol treats it as an opaque deterministic string. NOT part of
+    /// [`FunctionIdentity::stable_id`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    /// How this identity was produced. See [`IdentityResolution`].
+    /// Required: a missing field would silently default to one of the
+    /// variants and hide the resolution-confidence signal cloud
+    /// aggregation needs.
+    pub resolution: IdentityResolution,
+    /// Deterministic cross-surface join key of shape `fallow:fn:<8 hex>`.
+    /// Producers MUST compute this via [`function_identity_id`] so the
+    /// CLI, sidecar, and cloud agree on the value for the same function.
+    /// See the struct-level docs for the hash-input rationale.
+    pub stable_id: String,
+}
+
+impl FunctionIdentity {
+    /// Recompute the canonical [`FunctionIdentity::stable_id`] from
+    /// `file`, `name`, and `start_line`. Useful as a sanity check that a
+    /// producer-supplied `stable_id` was computed via the canonical
+    /// helper; consumers that want to verify the round-trip can compare
+    /// `self.stable_id == self.stable_id_computed()`.
+    #[must_use]
+    pub fn stable_id_computed(&self) -> String {
+        function_identity_id(&self.file, &self.name, self.start_line)
+    }
+}
+
 /// Supporting evidence for a [`Finding`]. Mirrors the rows of the decision
 /// table in `.internal/spec-production-coverage.md` so the CLI can render the
 /// "why" behind each verdict without re-deriving it.
@@ -425,10 +677,15 @@ pub struct Evidence {
 }
 
 /// A function the sidecar identified as a hot path in the current dump.
+///
+/// Marked `#[non_exhaustive]` in 0.6.0: downstream Rust consumers must
+/// stop using struct-literal construction. The wire shape is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HotPath {
     /// Deterministic content hash of shape `fallow:hot:<hash>`. See
-    /// [`hot_path_id`] for the canonical helper.
+    /// [`hot_path_id`] for the canonical helper. Continues to ship through
+    /// 0.6 alongside [`HotPath::identity`].
     pub id: String,
     /// Path to the source file, relative to [`Request::project_root`].
     pub file: String,
@@ -450,6 +707,10 @@ pub struct HotPath {
     /// invocation distribution of the current response's hot paths. `100`
     /// means the busiest function, `0` the quietest that still qualified.
     pub percentile: u8,
+    /// Canonical function identity introduced in 0.6.0. Optional for
+    /// forward-compat with 0.5-shape sidecars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<FunctionIdentity>,
 }
 
 /// Risk band for a blast-radius entry.
@@ -465,9 +726,14 @@ pub enum RiskBand {
 }
 
 /// A function with meaningful static or traffic-weighted blast radius.
+///
+/// Marked `#[non_exhaustive]` in 0.6.0: downstream Rust consumers must
+/// stop using struct-literal construction. The wire shape is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BlastRadiusEntry {
     /// Deterministic content hash of shape `fallow:blast:<hash>`.
+    /// Continues to ship through 0.6 alongside [`BlastRadiusEntry::identity`].
     pub id: String,
     /// Path to the source file, relative to [`Request::project_root`].
     pub file: String,
@@ -487,12 +753,21 @@ pub struct BlastRadiusEntry {
     pub deploys_touched: Option<u32>,
     /// Deterministic low / medium / high band.
     pub risk_band: RiskBand,
+    /// Canonical function identity introduced in 0.6.0. Optional for
+    /// forward-compat with 0.5-shape sidecars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<FunctionIdentity>,
 }
 
 /// A function ranked by runtime traffic, complexity, and ownership risk.
+///
+/// Marked `#[non_exhaustive]` in 0.6.0: downstream Rust consumers must
+/// stop using struct-literal construction. The wire shape is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ImportanceEntry {
     /// Deterministic content hash of shape `fallow:importance:<hash>`.
+    /// Continues to ship through 0.6 alongside [`ImportanceEntry::identity`].
     pub id: String,
     /// Path to the source file, relative to [`Request::project_root`].
     pub file: String,
@@ -511,6 +786,10 @@ pub struct ImportanceEntry {
     pub importance_score: f64,
     /// Templated one-sentence explanation, not free-form model text.
     pub reason: String,
+    /// Canonical function identity introduced in 0.6.0. Optional for
+    /// forward-compat with 0.5-shape sidecars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<FunctionIdentity>,
 }
 
 /// Machine-readable next-step hint for AI agents.
@@ -590,6 +869,50 @@ pub fn importance_id(file: &str, function: &str, line: u32) -> String {
     )
 }
 
+/// Compute the deterministic [`FunctionIdentity::stable_id`] for a function.
+///
+/// Emits `fallow:fn:<hash>` where `<hash>` is the first 8 hex characters of
+/// `SHA-256(file + name + start_line + "function")`. The concatenation is
+/// plain, unseparated UTF-8.
+///
+/// # Why columns are NOT in the hash
+///
+/// The canonical hash inputs intentionally exclude column / span / source
+/// hash metadata. Two producers observing the same function with
+/// different positional fidelity (V8 dumps that lack columns vs Istanbul
+/// fnMap that has them, vs oxc spans that have byte-accurate positions)
+/// MUST produce the same `stable_id` so the cross-surface join holds.
+/// Columns survive on the wire (see [`FunctionIdentity::start_column`])
+/// for display and same-line disambiguation, but are NOT part of the
+/// hash.
+///
+/// # Why there is no `kind` parameter
+///
+/// Unlike [`finding_id`] / [`hot_path_id`] / [`blast_radius_id`] /
+/// [`importance_id`], which are per-surface stable IDs, this helper
+/// produces ONE canonical ID per function across every surface the
+/// function appears on (findings, hot paths, blast radius, importance,
+/// static inventory). That is the whole point of the cross-surface join.
+///
+/// The canonical input order (`file`, `name`, `start_line`, then the
+/// literal salt `"function"`) and truncation (first 4 SHA-256 bytes
+/// rendered as 8 lowercase hex chars) are part of the wire contract.
+/// Changing any of them breaks ID stability across runs and invalidates
+/// any consumer that persists IDs (CI deduplication, suppression files,
+/// agent cross-references) and is therefore always a major bump.
+///
+/// Added in protocol 0.6.0.
+#[must_use]
+pub fn function_identity_id(file: &str, name: &str, start_line: u32) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(file.as_bytes());
+    hasher.update(name.as_bytes());
+    hasher.update(start_line.to_string().as_bytes());
+    hasher.update(b"function");
+    let digest = hasher.finalize();
+    format!("fallow:fn:{}", hex_prefix(&digest))
+}
+
 /// Canonical content hash shared by the stable ID helpers. The input order
 /// (file, function, line, kind) and truncation (first 4 SHA-256 bytes → 8 hex
 /// chars) are part of the wire contract; see [`finding_id`] for the rationale.
@@ -644,8 +967,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_constant_is_v0_5() {
-        assert!(PROTOCOL_VERSION.starts_with("0.5."));
+    fn version_constant_is_v0_6() {
+        assert!(PROTOCOL_VERSION.starts_with("0.6."));
     }
 
     #[test]
@@ -877,15 +1200,19 @@ mod tests {
         let hot = hot_path_id("src/a.ts", "foo", 42);
         let blast = blast_radius_id("src/a.ts", "foo", 42);
         let importance = importance_id("src/a.ts", "foo", 42);
+        let function = function_identity_id("src/a.ts", "foo", 42);
         assert!(blast.starts_with("fallow:blast:"));
         assert!(importance.starts_with("fallow:importance:"));
+        assert!(function.starts_with("fallow:fn:"));
         assert_eq!(blast.len(), "fallow:blast:".len() + 8);
         assert_eq!(importance.len(), "fallow:importance:".len() + 8);
+        assert_eq!(function.len(), "fallow:fn:".len() + 8);
         let suffixes = [
             &finding[finding.len() - 8..],
             &hot[hot.len() - 8..],
             &blast[blast.len() - 8..],
             &importance[importance.len() - 8..],
+            &function[function.len() - 8..],
         ];
         for (index, suffix) in suffixes.iter().enumerate() {
             assert!(
@@ -910,5 +1237,371 @@ mod tests {
             !json.contains("untracked_reason"),
             "expected untracked_reason omitted, got {json}"
         );
+    }
+
+    // -- FunctionIdentity v2 (protocol 0.6.0) -----------------------------
+
+    fn fixture_identity_full() -> FunctionIdentity {
+        let stable_id = function_identity_id("src/render.tsx", "render", 42);
+        FunctionIdentity {
+            file: "src/render.tsx".to_owned(),
+            name: "render".to_owned(),
+            start_line: 42,
+            start_column: Some(5),
+            end_line: Some(67),
+            end_column: Some(2),
+            source_hash: Some("abc123".to_owned()),
+            resolution: IdentityResolution::Resolved,
+            stable_id,
+        }
+    }
+
+    #[test]
+    fn unknown_identity_resolution_round_trips() {
+        let json = r#""future_state""#;
+        let parsed: IdentityResolution = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, IdentityResolution::Unknown));
+    }
+
+    #[test]
+    fn function_identity_round_trips_with_all_fields_set() {
+        let identity = fixture_identity_full();
+        let json = serde_json::to_string(&identity).unwrap();
+        let parsed: FunctionIdentity = serde_json::from_str(&json).unwrap();
+        assert_eq!(identity, parsed);
+    }
+
+    #[test]
+    fn function_identity_omits_columns_when_none() {
+        let identity = FunctionIdentity {
+            file: "src/a.ts".to_owned(),
+            name: "foo".to_owned(),
+            start_line: 1,
+            start_column: None,
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Unresolved,
+            stable_id: function_identity_id("src/a.ts", "foo", 1),
+        };
+        let json = serde_json::to_string(&identity).unwrap();
+        assert!(
+            !json.contains("start_column"),
+            "expected start_column omitted, got {json}"
+        );
+        assert!(
+            !json.contains("end_line"),
+            "expected end_line omitted, got {json}"
+        );
+        assert!(
+            !json.contains("end_column"),
+            "expected end_column omitted, got {json}"
+        );
+        assert!(
+            !json.contains("source_hash"),
+            "expected source_hash omitted, got {json}"
+        );
+    }
+
+    #[test]
+    fn function_identity_round_trips_with_some_columns() {
+        let identity = FunctionIdentity {
+            file: "src/b.ts".to_owned(),
+            name: "bar".to_owned(),
+            start_line: 10,
+            start_column: Some(3),
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Fallback,
+            stable_id: function_identity_id("src/b.ts", "bar", 10),
+        };
+        let json = serde_json::to_string(&identity).unwrap();
+        assert!(json.contains("\"start_column\":3"));
+        assert!(!json.contains("end_line"));
+        assert!(!json.contains("end_column"));
+        let parsed: FunctionIdentity = serde_json::from_str(&json).unwrap();
+        assert_eq!(identity, parsed);
+    }
+
+    #[test]
+    fn function_identity_id_is_deterministic() {
+        let first = function_identity_id("src/a.ts", "foo", 42);
+        let second = function_identity_id("src/a.ts", "foo", 42);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn function_identity_id_changes_with_file() {
+        assert_ne!(
+            function_identity_id("src/a.ts", "foo", 42),
+            function_identity_id("src/b.ts", "foo", 42),
+        );
+    }
+
+    #[test]
+    fn function_identity_id_changes_with_name() {
+        assert_ne!(
+            function_identity_id("src/a.ts", "foo", 42),
+            function_identity_id("src/a.ts", "bar", 42),
+        );
+    }
+
+    #[test]
+    fn function_identity_id_changes_with_start_line() {
+        assert_ne!(
+            function_identity_id("src/a.ts", "foo", 10),
+            function_identity_id("src/a.ts", "foo", 11),
+        );
+    }
+
+    #[test]
+    fn function_identity_id_unchanged_by_columns() {
+        // Cross-producer agreement test (BLOCK fix from panel review):
+        // V8 producers without column info MUST produce the same
+        // stable_id as Istanbul producers with column info, otherwise the
+        // cross-surface join silently breaks.
+        let no_columns = FunctionIdentity {
+            file: "src/a.ts".to_owned(),
+            name: "foo".to_owned(),
+            start_line: 42,
+            start_column: None,
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Unresolved,
+            stable_id: function_identity_id("src/a.ts", "foo", 42),
+        };
+        let with_columns = FunctionIdentity {
+            file: "src/a.ts".to_owned(),
+            name: "foo".to_owned(),
+            start_line: 42,
+            start_column: Some(5),
+            end_line: Some(67),
+            end_column: Some(2),
+            source_hash: Some("abc123".to_owned()),
+            resolution: IdentityResolution::Resolved,
+            stable_id: function_identity_id("src/a.ts", "foo", 42),
+        };
+        assert_eq!(no_columns.stable_id, with_columns.stable_id);
+        assert_eq!(no_columns.stable_id, no_columns.stable_id_computed());
+        assert_eq!(with_columns.stable_id, with_columns.stable_id_computed());
+    }
+
+    #[test]
+    fn function_identity_id_format_is_fallow_fn_8hex() {
+        let id = function_identity_id("src/a.ts", "foo", 42);
+        assert!(id.starts_with("fallow:fn:"));
+        let hash = &id["fallow:fn:".len()..];
+        assert_eq!(hash.len(), 8, "expected 8 hex chars, got {hash}");
+        assert!(
+            hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "expected lowercase hex, got {hash}"
+        );
+    }
+
+    #[test]
+    fn function_identity_stable_id_matches_helper() {
+        let identity = fixture_identity_full();
+        assert_eq!(identity.stable_id, identity.stable_id_computed());
+    }
+
+    #[test]
+    fn function_identity_id_anchor_fixture() {
+        // Conformance fixture: producers (fallow CLI, fallow-cov sidecar,
+        // browser/node beacons) MUST run this exact input through their
+        // own pipelines and obtain the same string. Divergence here means
+        // the cross-surface join would silently break in production.
+        assert_eq!(
+            function_identity_id("src/render.tsx", "render", 42),
+            "fallow:fn:43629542",
+        );
+    }
+
+    #[test]
+    fn finding_without_identity_deserializes() {
+        // 0.5-shape Finding (no identity field) must continue to parse
+        // with identity: None for forward-compat with older sidecars.
+        let json = r#"{
+            "id": "fallow:prod:deadbeef",
+            "file": "src/a.ts",
+            "function": "foo",
+            "line": 42,
+            "verdict": "active",
+            "invocations": 100,
+            "confidence": "high",
+            "evidence": {
+                "static_status": "used",
+                "test_coverage": "covered",
+                "v8_tracking": "tracked",
+                "observation_days": 30,
+                "deployments_observed": 14
+            }
+        }"#;
+        let finding: Finding = serde_json::from_str(json).unwrap();
+        assert!(finding.identity.is_none());
+        assert_eq!(finding.function, "foo");
+    }
+
+    #[test]
+    fn static_function_without_identity_deserializes() {
+        // 0.5-shape StaticFunction (no identity field) must parse with
+        // identity: None for forward-compat with older CLIs.
+        let json = r#"{
+            "name": "foo",
+            "start_line": 1,
+            "end_line": 5,
+            "cyclomatic": 2,
+            "static_used": true,
+            "test_covered": false
+        }"#;
+        let func: StaticFunction = serde_json::from_str(json).unwrap();
+        assert!(func.identity.is_none());
+    }
+
+    #[test]
+    fn hot_path_without_identity_deserializes() {
+        // 0.5-shape HotPath (no identity field) must parse with
+        // identity: None for forward-compat with older sidecars.
+        let json = r#"{
+            "id": "fallow:hot:deadbeef",
+            "file": "src/a.ts",
+            "function": "foo",
+            "line": 42,
+            "end_line": 67,
+            "invocations": 1000,
+            "percentile": 95
+        }"#;
+        let hot: HotPath = serde_json::from_str(json).unwrap();
+        assert!(hot.identity.is_none());
+        assert_eq!(hot.function, "foo");
+    }
+
+    #[test]
+    fn blast_radius_entry_without_identity_deserializes() {
+        let json = r#"{
+            "id": "fallow:blast:deadbeef",
+            "file": "src/a.ts",
+            "function": "foo",
+            "line": 42,
+            "caller_count": 10,
+            "caller_count_weighted_by_traffic": 5000,
+            "risk_band": "high"
+        }"#;
+        let entry: BlastRadiusEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.identity.is_none());
+        assert_eq!(entry.caller_count, 10);
+    }
+
+    #[test]
+    fn importance_entry_without_identity_deserializes() {
+        let json = r#"{
+            "id": "fallow:importance:deadbeef",
+            "file": "src/a.ts",
+            "function": "foo",
+            "line": 42,
+            "invocations": 5000,
+            "cyclomatic": 7,
+            "owner_count": 2,
+            "importance_score": 87.5,
+            "reason": "high traffic, complex, narrowly owned"
+        }"#;
+        let entry: ImportanceEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.identity.is_none());
+        assert!((entry.importance_score - 87.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn stable_id_field_required_on_function_identity() {
+        // stable_id is the canonical cross-surface join key; a missing
+        // field would silently default to an empty string and every
+        // downstream dedup keyed on stable_id would collapse to one
+        // bucket. Locks the explicit non-default contract.
+        let json = r#"{
+            "file": "src/a.ts",
+            "name": "foo",
+            "start_line": 42,
+            "resolution": "resolved"
+        }"#;
+        let result: Result<FunctionIdentity, _> = serde_json::from_str(json);
+        let err = result
+            .expect_err("missing stable_id must fail deserialization")
+            .to_string();
+        assert!(err.contains("stable_id"), "unexpected error text: {err}");
+    }
+
+    #[test]
+    fn identity_resolution_field_required_on_function_identity() {
+        // resolution carries the source-map / fallback confidence signal
+        // cloud aggregation relies on; a missing field would silently
+        // default and hide the difference between Resolved and Unresolved.
+        let json = r#"{
+            "file": "src/a.ts",
+            "name": "foo",
+            "start_line": 42,
+            "stable_id": "fallow:fn:43629542"
+        }"#;
+        let result: Result<FunctionIdentity, _> = serde_json::from_str(json);
+        let err = result
+            .expect_err("missing resolution must fail deserialization")
+            .to_string();
+        assert!(err.contains("resolution"), "unexpected error text: {err}");
+    }
+
+    #[test]
+    fn unresolved_identity_with_columns_round_trips() {
+        // Locks the "document, don't enforce" stance: the protocol's
+        // rustdoc on IdentityResolution::Unresolved says columns should
+        // be absent, but serde does not reject a non-conforming
+        // producer that emits them anyway. Cloud / agent consumers
+        // SHOULD ignore the columns when resolution == Unresolved.
+        // A serde-time rejection would force every consumer to validate
+        // and would not actually fix the producer; we tolerate and
+        // document instead.
+        let json = r#"{
+            "file": "src/a.ts",
+            "name": "foo",
+            "start_line": 42,
+            "start_column": 5,
+            "resolution": "unresolved",
+            "stable_id": "fallow:fn:43629542"
+        }"#;
+        let parsed: FunctionIdentity = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed.resolution, IdentityResolution::Unresolved));
+        assert_eq!(parsed.start_column, Some(5));
+    }
+
+    #[test]
+    fn same_line_functions_distinct_by_identity_via_column_metadata() {
+        // Two anonymous callbacks on the same line of the same file with
+        // the same name collide on stable_id (intentional: cross-producer
+        // join). Display surfaces disambiguate via the column metadata
+        // which survives on the wire even though it does not enter the
+        // hash. This is the explicit panel-review BLOCK fix: columns
+        // ride along for display, NOT for hashing.
+        let first = FunctionIdentity {
+            file: "src/a.ts".to_owned(),
+            name: "<anonymous>".to_owned(),
+            start_line: 7,
+            start_column: Some(12),
+            end_line: Some(7),
+            end_column: Some(40),
+            source_hash: None,
+            resolution: IdentityResolution::Resolved,
+            stable_id: function_identity_id("src/a.ts", "<anonymous>", 7),
+        };
+        let second = FunctionIdentity {
+            start_column: Some(50),
+            end_column: Some(78),
+            ..first.clone()
+        };
+        assert_eq!(first.stable_id, second.stable_id);
+        assert_ne!(first.start_column, second.start_column);
+        // Column metadata survives serde so display can disambiguate.
+        let json_first = serde_json::to_string(&first).unwrap();
+        let json_second = serde_json::to_string(&second).unwrap();
+        assert_ne!(json_first, json_second);
+        assert!(json_first.contains("\"start_column\":12"));
+        assert!(json_second.contains("\"start_column\":50"));
     }
 }
