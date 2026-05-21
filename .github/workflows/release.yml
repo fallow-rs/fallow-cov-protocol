@@ -134,6 +134,14 @@ jobs:
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # zizmor: ignore[use-trusted-publishing]
+        # TODO(trusted-publishing): migrate to crates.io OIDC trusted
+        # publishing once the trusted publisher is registered for this
+        # crate on https://crates.io. Requires configuring the trusted
+        # publisher on the crates.io web UI, adding `id-token: write`
+        # permission to this job, and switching to cargo's OIDC-based
+        # publish flow. Token-based publish is the documented bootstrap
+        # path until that infra exists.
         run: cargo publish
 
       - name: Extract CHANGELOG slice for this version
@@ -166,12 +174,23 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
-        with:
-          name: ${{ steps.changelog.outputs.title }}
-          tag_name: ${{ steps.version.outputs.tag }}
-          body: ${{ steps.changelog.outputs.body }}
-          draft: false
-          prerelease: false
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ${{ steps.changelog.outputs.title }}
+          BODY: ${{ steps.changelog.outputs.body }}
+        run: |
+          set -euo pipefail
+          # All inputs are derived from this workflow's own steps (version
+          # extraction + CHANGELOG slice), not from external event payload,
+          # so direct env-var consumption by `gh release create` is safe.
+          # If the release already exists for this tag (re-run path), skip
+          # creation rather than failing the job.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::release $TAG already exists; skipping gh release create"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --title "$TITLE" \
+            --notes "$BODY"
