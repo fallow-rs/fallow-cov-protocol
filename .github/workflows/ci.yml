@@ -1,19 +1,9 @@
 name: CI
 
-# CI BUDGET NOTE (temporary):
-# The account is near its Actions minute quota. Per-push/PR CI is trimmed to
-# ubuntu-latest only; the macOS + Windows matrix entries, MSRV job, and
-# publish-dry-run are gated behind `workflow_dispatch` and must be run
-# manually (Actions tab → "Run workflow") or locally before a release:
-#
-#   cargo test --all-targets
-#   cargo clippy --all-targets -- -D warnings
-#   cargo fmt --all -- --check
-#   cargo +1.75.0 check --all-targets        # MSRV
-#   cargo publish --dry-run                  # before tagging
-#
-# Revert to per-push by removing the `if:` gates below and restoring the
-# full matrix once the quota resets.
+# Per-push/PR CI runs the full ubuntu matrix plus MSRV and publish-dry-run.
+# macOS and Windows matrix entries are kept on workflow_dispatch only (10x
+# and 2x billing respectively); the contract is wire-format JSON with no
+# platform-sensitive code, so ubuntu coverage is the meaningful gate.
 
 on:
   push:
@@ -147,9 +137,6 @@ jobs:
 
   msrv:
     name: MSRV (1.75)
-    # Temporarily manual-only to stay under the Actions quota; run locally via
-    # `cargo +1.75.0 check --all-targets` before merging MSRV-sensitive changes.
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -169,9 +156,6 @@ jobs:
 
   publish-dry-run:
     name: Publish (dry run)
-    # Manual-only while the Actions quota is tight; the release skill runs
-    # `cargo publish --dry-run` locally before tagging.
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
