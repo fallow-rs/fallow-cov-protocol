@@ -1,6 +1,6 @@
 ---
-name: release
-description: Bump version, tag, publish to crates.io, and coordinate dep bumps in consumer repos (fallow, fallow-cloud)
+name: fallow-cov-protocol-release
+description: Bump version, tag, and publish fallow-cov-protocol to crates.io; coordinate dep bumps in consumer repos (fallow, fallow-cloud). Use this instead of the bare `release` slash command to avoid name collisions with sibling project skills.
 ---
 
 Cut a new release of `fallow-cov-protocol`. The crate is the wire contract between the fallow CLI and the fallow-cov sidecar, so the release order matters: publish this crate first, then bump consumer deps in a grace-window release of the sidecar, then the CLI. See `.claude/rules/protocol-versioning.md` for the full policy.
