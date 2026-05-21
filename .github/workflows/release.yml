@@ -51,6 +51,9 @@ jobs:
           # ref already points at it. Either way checkout by the resolved
           # ref so downstream steps always see the release tree.
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          # GitHub release creation uses the explicit GH_TOKEN env var below;
+          # no need for the auto-persisted token to stick around on disk.
+          persist-credentials: false
 
       - name: Extract version from tag
         id: version

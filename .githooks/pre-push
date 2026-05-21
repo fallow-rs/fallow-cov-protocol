@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Pre-push hook - mirrors the CI checks that block merges to main.
+#
+# Why: a tag-then-fix cycle on a published crate is expensive (yank, bump,
+# re-pin in the sidecar and CLI). This hook closes the gap between local
+# work and the CI gates.
+#
+# Setup (one-time, per clone):
+#   git config core.hooksPath .githooks
+#
+# Bypass (use sparingly, e.g. WIP branches for early CI signal):
+#   SKIP_PRE_PUSH=1 git push
+#
+# Opt-in extras:
+#   RUN_TESTS=1 git push       # also run `cargo test` (~5s)
+
+set -euo pipefail
+
+if [ "${SKIP_PRE_PUSH:-0}" = "1" ]; then
+  echo "[pre-push] SKIP_PRE_PUSH=1, skipping all checks"
+  exit 0
+fi
+
+# Skip on "delete remote branch" pushes (no commits being added). Read every
+# ref git hands us; only short-circuit if every line is a deletion. Otherwise
+# at least one ref is a real push and we must run the checks.
+all_deletes=1
+zero="0000000000000000000000000000000000000000"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_sha" != "$zero" ]; then
+    all_deletes=0
+  fi
+done
+if [ "$all_deletes" = "1" ]; then
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "[pre-push] cargo fmt --check"
+cargo fmt --all --check
+
+echo "[pre-push] cargo clippy --all-targets -- -D warnings"
+cargo clippy --all-targets -- -D warnings
+
+echo "[pre-push] typos ."
+if ! command -v typos >/dev/null 2>&1; then
+  echo "  typos not installed, install with: cargo install typos-cli"
+  echo "  skipping this check"
+else
+  typos .
+fi
+
+if [ "${RUN_TESTS:-0}" = "1" ]; then
+  echo "[pre-push] cargo test"
+  cargo test
+fi
+
+echo "[pre-push] OK, pushing."

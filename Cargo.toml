@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 description = "Versioned JSON envelope types shared between the fallow CLI and Fallow Runtime's production-coverage sidecar."
 repository = "https://github.com/fallow-rs/fallow-cov-protocol"
 homepage = "https://fallow.tools"
+documentation = "https://docs.rs/fallow-cov-protocol"
 readme = "README.md"
 keywords = ["fallow", "coverage", "protocol", "dead-code", "v8"]
 categories = ["development-tools", "parser-implementations"]
