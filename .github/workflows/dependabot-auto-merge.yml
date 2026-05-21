@@ -12,7 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      # gh pr merge --auto talks to the PR API only; no repo writes needed.
+      # contents: write is required for the mergePullRequest GraphQL mutation
+      # that backs `gh pr merge --auto`. pull-requests: write alone is not
+      # enough; observed as `Resource not accessible by integration` failures
+      # when contents was scoped down. Risk is bounded by the actor gate
+      # (dependabot[bot] only) and by `--auto` waiting on required CI.
+      contents: write
       pull-requests: write
     steps:
       - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
