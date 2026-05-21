@@ -29,8 +29,8 @@ git config core.hooksPath .githooks
 
 - `clippy::{all, pedantic, nursery, cargo}` at `warn` with a short, documented allow-list in `Cargo.toml`.
 - `#![forbid(unsafe_code)]` at the top of `lib.rs`; also declared in `[lints.rust]`.
-- MSRV is `1.75`, pinned in `rust-toolchain.toml` and verified by the `msrv` CI job. New language/stdlib features that require a newer toolchain must bump the MSRV in the same PR with a changelog entry.
-- Suppress a specific lint with `#[expect(clippy::..., reason = "...")]`, not `#[allow]`, so the suppression fails if the lint becomes unnecessary (MSRV 1.81+ — until then, use `#[allow(..., reason = "...")]`).
+- MSRV is `1.85`, pinned in `rust-toolchain.toml` and verified by the `msrv` CI job. New language/stdlib features that require a newer toolchain must bump the MSRV in the same PR with a changelog entry.
+- Suppress a specific lint with `#[expect(clippy::..., reason = "...")]`, not `#[allow]`, so the suppression fails if the lint becomes unnecessary.
 
 ## Semver and the wire contract
 

@@ -8,7 +8,7 @@ paths:
 
 ## Crate-level policy
 - `#![forbid(unsafe_code)]` at the top of `lib.rs` — also declared in `[lints.rust]` in `Cargo.toml`. Any `unsafe` is a hard reject.
-- MSRV is `1.75` in `Cargo.toml`. New language/stdlib features that need a newer toolchain must bump MSRV explicitly in the same PR and land with a changelog note.
+- MSRV is `1.85` in `Cargo.toml`. New language/stdlib features that need a newer toolchain must bump MSRV explicitly in the same PR and land with a changelog note.
 - Dependency surface is intentionally minimal: `serde`, `serde_json`, `sha2`. Adding a new dependency requires a justification in the PR description and a clippy allowlist update if needed. Transitive bloat affects every binary that pulls this crate.
 
 ## Clippy

@@ -136,7 +136,7 @@ jobs:
       - run: uvx zizmor --min-confidence medium --format plain .
 
   msrv:
-    name: MSRV (1.75)
+    name: MSRV (1.85)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -147,8 +147,8 @@ jobs:
           persist-credentials: false
       - name: Install pinned MSRV toolchain
         run: |
-          rustup toolchain install 1.75.0 --profile minimal
-          rustup override set 1.75.0
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup override set 1.85.0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: msrv
