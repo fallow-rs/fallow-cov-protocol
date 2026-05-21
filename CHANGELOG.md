@@ -7,6 +7,81 @@ crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 `.claude/rules/protocol-versioning.md` for the full policy.
 
+## [0.7.0] - 2026-05-21
+
+### Changed (additive producer constraint)
+
+- **`FunctionIdentity::source_hash` format is now pinned**, closing the
+  cross-producer non-comparability gap that issue #3 surfaced. The field
+  was previously documented as "opaque, producer-defined", which let each
+  producer pipeline (`fallow-v8-coverage`, `oxc_coverage_v8`, the Istanbul
+  ingester, browser / node beacons) emit incompatible hash formats
+  (`sha256-hex`, `xxh3-base64`, `blake3-truncated`) and rendered the
+  tiebreaker useless across pipelines.
+
+  Pinned format (added in protocol 0.7.0, MUST hold across producers):
+  the first 8 bytes of `SHA-256(<canonical body bytes>)` rendered as 16
+  lowercase hex characters. Canonical body bytes are the bytes the
+  producing compiler or parser sees for the function, including the
+  signature line and the closing brace, with NO whitespace
+  normalization. Producers that cannot canonicalize the bytes the same
+  way as their siblings MUST omit the field rather than emit a
+  divergent format.
+
+  Migration for producers shipping a non-conforming `source_hash` today:
+  switch the producer to the new `source_hash_for` helper in this crate,
+  or omit the field. No wire shape change for consumers; the field stays
+  `Option<String>`.
+
+### Added
+
+- **`source_hash_for(body: &[u8]) -> String`** helper computing the
+  canonical `FunctionIdentity::source_hash` value. Reuses the existing
+  `sha2` dependency. No new transitive deps. Producers MUST route every
+  `source_hash` value through this helper so cross-producer agreement
+  holds by construction.
+- **Anchor fixture** `source_hash_for_anchor_fixture` pinning
+  `source_hash_for(b"function foo() { return 1; }")` to the literal
+  string `"74846e29a52fe863"`. Producers self-test against this fixture
+  in their own CIs to detect divergence at the source rather than at
+  cross-surface join time.
+- **`function_identity_full_json_shape_anchor_fixture`** and
+  **`function_identity_minimal_json_shape_anchor_fixture`** locking the
+  byte-level JSON output of `FunctionIdentity` for the every-field-set
+  and the minimum-required (all `Option`s `None`) shapes. Catches silent
+  field-reorder regressions and `skip_serializing_if` drift.
+- **`identity_resolution_unresolved_shape_fixture`** documenting the
+  on-wire shape an MCP agent or cloud aggregator sees for a failed-join
+  entry where `resolution = "unresolved"` and columns / `source_hash`
+  are absent.
+- **`blast_radius_id_anchor_fixture`** and
+  **`importance_id_anchor_fixture`** parallel to the existing
+  `function_identity_id_anchor_fixture`. Locks the canonical hash
+  inputs and truncation for the remaining stable-ID helpers so every
+  producer can self-test agreement.
+- **Per-field stability assertions** for `function_identity_id`:
+  separate tests pin invariance under independent mutation of
+  `start_column`, `end_line`, `end_column`, and `source_hash`. The
+  prior `function_identity_id_unchanged_by_columns` test bundled all
+  four metadata fields; the per-field cases catch a future regression
+  where the helper accidentally starts hashing one specific metadata
+  field but not the others.
+- **Tightened rustdoc** on `FunctionIdentity::stable_id_computed`. The
+  method is now explicitly documented as a diagnostic helper, NOT a
+  validation gate. Consumers MUST NOT reject payloads whose `stable_id`
+  differs from the computed value; doing so would turn every such
+  consumer into a hard-fail on the next protocol major that evolves the
+  hash inputs.
+
+### Other
+
+- `PROTOCOL_VERSION` bumped to `"0.7.0"`. `Cargo.toml [package].version`
+  matches per `.claude/rules/protocol-versioning.md`.
+- Internal `hex_prefix` refactored to take a `bytes` count so the 4-byte
+  truncation used by `finding_id` / `hot_path_id` / `blast_radius_id` /
+  `importance_id` / `function_identity_id` and the 8-byte truncation
+  used by `source_hash_for` share one auditable implementation.
+
 ## [0.6.0] - 2026-05-20
 
 ### Added

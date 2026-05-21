@@ -68,6 +68,28 @@
 //!   constructed these via struct literals (the wire shape is unchanged
 //!   and forward-compatible). Future field additions become pure additive
 //!   changes; the CHANGELOG calls out the migration path.
+//!
+//! # 0.7 changes
+//!
+//! - [`FunctionIdentity::source_hash`] format is now pinned: the first 8
+//!   bytes of `SHA-256(<canonical body bytes>)` rendered as 16 lowercase
+//!   hex characters. Compute via the new [`source_hash_for`] helper.
+//!   Producers that cannot canonicalize the bytes the same way as their
+//!   siblings MUST omit the field rather than emit a divergent format.
+//!   Closes the cross-producer non-comparability gap that the 0.6.0
+//!   "producer-defined, opaque string" wording allowed.
+//! - New [`source_hash_for`] helper. Reuses the existing `sha2`
+//!   dependency. No new transitive deps. Anchor fixture
+//!   (`source_hash_for_anchor_fixture` in the test module) pins a known
+//!   input to a known output so producers can self-test.
+//! - Tightened rustdoc on [`FunctionIdentity::stable_id_computed`]
+//!   documenting the method as a diagnostic helper, NOT a validation
+//!   gate. Consumers MUST NOT reject payloads whose `stable_id` differs
+//!   from the value returned by the helper.
+//! - Byte-level JSON-shape anchor fixtures added for [`FunctionIdentity`]
+//!   (full + minimal) plus anchor fixtures for [`blast_radius_id`] and
+//!   [`importance_id`] parallel to the existing
+//!   [`function_identity_id`] fixture.
 
 #![forbid(unsafe_code)]
 
@@ -75,7 +97,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.6.0";
+pub const PROTOCOL_VERSION: &str = "0.7.0";
 
 // -- Request envelope -------------------------------------------------------
 
@@ -623,11 +645,26 @@ pub struct FunctionIdentity {
     /// [`FunctionIdentity::stable_id`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_column: Option<u32>,
-    /// Optional content hash of the function source body, useful as a
-    /// tiebreaker for moved or renamed functions whose positions changed
-    /// but whose source is identical. Format is producer-defined; the
-    /// protocol treats it as an opaque deterministic string. NOT part of
-    /// [`FunctionIdentity::stable_id`].
+    /// Optional cross-producer tiebreaker for moved or renamed functions
+    /// whose positions changed but whose source body is byte-identical.
+    ///
+    /// Format (pinned in protocol 0.7.0, MUST hold across producers): the
+    /// first 8 bytes of `SHA-256(<canonical body bytes>)` rendered as 16
+    /// lowercase hex characters. Compute via [`source_hash_for`] so every
+    /// producer agrees on the value.
+    ///
+    /// Canonical body bytes (also pinned): the bytes the producing
+    /// compiler or parser sees for the function, including the signature
+    /// line and the closing brace, with NO whitespace normalization. Two
+    /// producers observing the same function in the same file MUST hand
+    /// the same byte slice to [`source_hash_for`].
+    ///
+    /// Producers that cannot compute this format MUST omit the field
+    /// rather than emit a divergent string. Consumers MAY use a present
+    /// value as a cross-producer comparability signal; an absent value
+    /// carries no information.
+    ///
+    /// NOT part of [`FunctionIdentity::stable_id`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hash: Option<String>,
     /// How this identity was produced. See [`IdentityResolution`].
@@ -644,10 +681,17 @@ pub struct FunctionIdentity {
 
 impl FunctionIdentity {
     /// Recompute the canonical [`FunctionIdentity::stable_id`] from
-    /// `file`, `name`, and `start_line`. Useful as a sanity check that a
-    /// producer-supplied `stable_id` was computed via the canonical
-    /// helper; consumers that want to verify the round-trip can compare
-    /// `self.stable_id == self.stable_id_computed()`.
+    /// `file`, `name`, and `start_line`. Diagnostic helper only: useful
+    /// for logging or test assertions that a producer-supplied
+    /// `stable_id` was computed via the canonical helper, and for
+    /// `debug_assert!(self.stable_id == self.stable_id_computed())` in
+    /// producer test suites.
+    ///
+    /// NOT a validation gate. Consumers MUST NOT reject payloads whose
+    /// `stable_id` differs from the value returned here. A future
+    /// protocol major that evolves the hash inputs would otherwise turn
+    /// every such consumer into a hard-fail on upgrade, defeating the
+    /// cross-surface join the value exists to provide.
     #[must_use]
     pub fn stable_id_computed(&self) -> String {
         function_identity_id(&self.file, &self.name, self.start_line)
@@ -910,12 +954,43 @@ pub fn function_identity_id(file: &str, name: &str, start_line: u32) -> String {
     hasher.update(start_line.to_string().as_bytes());
     hasher.update(b"function");
     let digest = hasher.finalize();
-    format!("fallow:fn:{}", hex_prefix(&digest))
+    format!("fallow:fn:{}", hex_prefix(&digest, 4))
+}
+
+/// Compute the canonical [`FunctionIdentity::source_hash`] for the given
+/// canonical body bytes.
+///
+/// Emits 16 lowercase hex characters: the first 8 bytes of `SHA-256(body)`.
+/// No `fallow:` prefix because the value is a content tiebreaker, not a
+/// qualified ID; see [`FunctionIdentity::source_hash`] for the field
+/// rustdoc and the canonicalization rule (signature line plus body plus
+/// closing brace, no whitespace normalization).
+///
+/// Cross-producer comparability is the whole point: V8, Istanbul, oxc,
+/// and beacon producers that all derive the same canonical body for the
+/// same function MUST produce the same string from this helper. Producers
+/// that cannot canonicalize the bytes the same way as their siblings MUST
+/// omit [`FunctionIdentity::source_hash`] rather than emit a divergent
+/// format.
+///
+/// Truncation (first 8 SHA-256 bytes to 16 hex chars) and lowercase hex
+/// encoding are part of the wire contract. Changing either invalidates
+/// every previously persisted `source_hash` value and is therefore always
+/// a major bump.
+///
+/// Added in protocol 0.7.0.
+#[must_use]
+pub fn source_hash_for(body: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(body);
+    let digest = hasher.finalize();
+    hex_prefix(&digest, 8)
 }
 
 /// Canonical content hash shared by the stable ID helpers. The input order
-/// (file, function, line, kind) and truncation (first 4 SHA-256 bytes → 8 hex
-/// chars) are part of the wire contract; see [`finding_id`] for the rationale.
+/// (file, function, line, kind) and truncation (first 4 SHA-256 bytes to 8
+/// hex chars) are part of the wire contract; see [`finding_id`] for the
+/// rationale.
 fn content_hash(file: &str, function: &str, line: u32, kind: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(file.as_bytes());
@@ -923,17 +998,20 @@ fn content_hash(file: &str, function: &str, line: u32, kind: &str) -> String {
     hasher.update(line.to_string().as_bytes());
     hasher.update(kind.as_bytes());
     let digest = hasher.finalize();
-    hex_prefix(&digest)
+    hex_prefix(&digest, 4)
 }
 
-/// Encode the first four bytes of `digest` as lowercase hex — exactly eight
-/// characters. Kept separate so the truncation length is easy to audit. Total
-/// by construction: `HEX` is ASCII and `char::from(u8)` is infallible, so the
-/// helper never panics.
-fn hex_prefix(digest: &[u8]) -> String {
+/// Encode the first `bytes` bytes of `digest` as lowercase hex, returning
+/// a `2 * bytes`-character string. Kept as a single helper so every
+/// truncation length used by the wire contract is auditable from one
+/// place. Total by construction: `HEX` is ASCII and `char::from(u8)` is
+/// infallible, so the helper never panics. If `bytes > digest.len()` the
+/// iterator silently caps at `digest.len()`; the SHA-256 callers all
+/// satisfy `bytes <= 32`.
+fn hex_prefix(digest: &[u8], bytes: usize) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(8);
-    for &byte in digest.iter().take(4) {
+    let mut out = String::with_capacity(bytes * 2);
+    for &byte in digest.iter().take(bytes) {
         out.push(char::from(HEX[usize::from(byte >> 4)]));
         out.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
@@ -967,8 +1045,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_constant_is_v0_6() {
-        assert!(PROTOCOL_VERSION.starts_with("0.6."));
+    fn version_constant_is_v0_7() {
+        assert!(PROTOCOL_VERSION.starts_with("0.7."));
     }
 
     #[test]
@@ -1250,7 +1328,7 @@ mod tests {
             start_column: Some(5),
             end_line: Some(67),
             end_column: Some(2),
-            source_hash: Some("abc123".to_owned()),
+            source_hash: Some(source_hash_for(b"function render() {}")),
             resolution: IdentityResolution::Resolved,
             stable_id,
         }
@@ -1379,7 +1457,7 @@ mod tests {
             start_column: Some(5),
             end_line: Some(67),
             end_column: Some(2),
-            source_hash: Some("abc123".to_owned()),
+            source_hash: Some(source_hash_for(b"function foo() {}")),
             resolution: IdentityResolution::Resolved,
             stable_id: function_identity_id("src/a.ts", "foo", 42),
         };
@@ -1603,5 +1681,247 @@ mod tests {
         assert_ne!(json_first, json_second);
         assert!(json_first.contains("\"start_column\":12"));
         assert!(json_second.contains("\"start_column\":50"));
+    }
+
+    #[test]
+    fn function_identity_full_json_shape_anchor_fixture() {
+        // Byte-equal wire-shape pin (panel item 2). Catches silent
+        // field-reorder regressions and skip_serializing_if drift on the
+        // every-Option-Some path that the omits-when-none test cannot
+        // catch in isolation. Producers and JSON-diff tooling consume this
+        // exact byte sequence; changing the literal is a wire-shape break.
+        let identity = fixture_identity_full();
+        let json = serde_json::to_string(&identity).unwrap();
+        assert_eq!(
+            json,
+            r#"{"file":"src/render.tsx","name":"render","start_line":42,"start_column":5,"end_line":67,"end_column":2,"source_hash":"e25ba02c5e53651f","resolution":"resolved","stable_id":"fallow:fn:43629542"}"#,
+        );
+    }
+
+    #[test]
+    fn function_identity_minimal_json_shape_anchor_fixture() {
+        // Byte-equal wire-shape pin for the minimum required surface
+        // (panel item 2 companion). The four skip_serializing_if Options
+        // are absent. Pairs with the full-shape fixture above so a future
+        // PR cannot regress either the Some path or the None path without
+        // visibly editing a literal here.
+        let identity = FunctionIdentity {
+            file: "src/minimal.ts".to_owned(),
+            name: "f".to_owned(),
+            start_line: 1,
+            start_column: None,
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Resolved,
+            stable_id: function_identity_id("src/minimal.ts", "f", 1),
+        };
+        let json = serde_json::to_string(&identity).unwrap();
+        assert_eq!(
+            json,
+            r#"{"file":"src/minimal.ts","name":"f","start_line":1,"resolution":"resolved","stable_id":"fallow:fn:a76cfb64"}"#,
+        );
+    }
+
+    #[test]
+    fn identity_resolution_unresolved_shape_fixture() {
+        // Failed-join consumer fixture (panel cross-cutting item from
+        // Diego and Aria). Documents the on-wire shape an MCP agent or
+        // cloud aggregator sees when a producer could not resolve the
+        // identity beyond file / name / start_line: columns and
+        // source_hash MUST be absent, resolution MUST serialize as
+        // "unresolved". The protocol documents this stance but does not
+        // enforce it via serde; see IdentityResolution::Unresolved
+        // rustdoc and unresolved_identity_with_columns_round_trips.
+        let identity = FunctionIdentity {
+            file: "src/unresolved.ts".to_owned(),
+            name: "mystery_fn".to_owned(),
+            start_line: 42,
+            start_column: None,
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Unresolved,
+            stable_id: function_identity_id("src/unresolved.ts", "mystery_fn", 42),
+        };
+        let json = serde_json::to_string(&identity).unwrap();
+        assert_eq!(
+            json,
+            r#"{"file":"src/unresolved.ts","name":"mystery_fn","start_line":42,"resolution":"unresolved","stable_id":"fallow:fn:66db18d1"}"#,
+        );
+    }
+
+    #[test]
+    fn function_identity_id_unchanged_by_start_column() {
+        // Per-field stability assertion (panel item 5). The struct-level
+        // function_identity_id_unchanged_by_columns test bundles all four
+        // metadata fields; the per-field cases catch a future regression
+        // where the helper accidentally starts hashing one specific
+        // metadata field but not the others.
+        let base = function_identity_id("src/stability.ts", "foo", 10);
+        let with_start_column = FunctionIdentity {
+            file: "src/stability.ts".to_owned(),
+            name: "foo".to_owned(),
+            start_line: 10,
+            start_column: Some(7),
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Fallback,
+            stable_id: function_identity_id("src/stability.ts", "foo", 10),
+        };
+        assert_eq!(base, with_start_column.stable_id);
+        assert_eq!(base, with_start_column.stable_id_computed());
+    }
+
+    #[test]
+    fn function_identity_id_unchanged_by_end_line() {
+        let base = function_identity_id("src/stability.ts", "foo", 10);
+        let with_end_line = FunctionIdentity {
+            file: "src/stability.ts".to_owned(),
+            name: "foo".to_owned(),
+            start_line: 10,
+            start_column: None,
+            end_line: Some(99),
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Fallback,
+            stable_id: function_identity_id("src/stability.ts", "foo", 10),
+        };
+        assert_eq!(base, with_end_line.stable_id);
+        assert_eq!(base, with_end_line.stable_id_computed());
+    }
+
+    #[test]
+    fn function_identity_id_unchanged_by_end_column() {
+        let base = function_identity_id("src/stability.ts", "foo", 10);
+        let with_end_column = FunctionIdentity {
+            file: "src/stability.ts".to_owned(),
+            name: "foo".to_owned(),
+            start_line: 10,
+            start_column: None,
+            end_line: None,
+            end_column: Some(42),
+            source_hash: None,
+            resolution: IdentityResolution::Fallback,
+            stable_id: function_identity_id("src/stability.ts", "foo", 10),
+        };
+        assert_eq!(base, with_end_column.stable_id);
+        assert_eq!(base, with_end_column.stable_id_computed());
+    }
+
+    #[test]
+    fn function_identity_id_unchanged_by_source_hash() {
+        let base = function_identity_id("src/stability.ts", "foo", 10);
+        let with_source_hash = FunctionIdentity {
+            file: "src/stability.ts".to_owned(),
+            name: "foo".to_owned(),
+            start_line: 10,
+            start_column: None,
+            end_line: None,
+            end_column: None,
+            source_hash: Some(source_hash_for(b"function foo() { return 1; }")),
+            resolution: IdentityResolution::Fallback,
+            stable_id: function_identity_id("src/stability.ts", "foo", 10),
+        };
+        assert_eq!(base, with_source_hash.stable_id);
+        assert_eq!(base, with_source_hash.stable_id_computed());
+    }
+
+    #[test]
+    fn source_hash_for_anchor_fixture() {
+        // Conformance fixture for the pinned source_hash format added in
+        // protocol 0.7.0. Producers (fallow CLI, fallow-cov sidecar,
+        // browser / node beacons, Istanbul ingester) MUST run this exact
+        // byte sequence through their own pipelines and obtain the same
+        // 16-hex string. Divergence here means the cross-producer
+        // tiebreaker would silently break in production.
+        assert_eq!(
+            source_hash_for(b"function foo() { return 1; }"),
+            "74846e29a52fe863",
+        );
+    }
+
+    #[test]
+    fn source_hash_for_is_deterministic() {
+        let first = source_hash_for(b"const greet = (name: string) => `hi, ${name}`;\n");
+        let second = source_hash_for(b"const greet = (name: string) => `hi, ${name}`;\n");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn source_hash_for_differs_on_whitespace_change() {
+        // The canonicalization rule says no whitespace normalization, so
+        // two byte slices that differ ONLY by whitespace must produce
+        // different hashes. Locks the no-normalization stance against any
+        // future producer that quietly trims or collapses whitespace.
+        let tight = source_hash_for(b"function foo(){return 1;}");
+        let loose = source_hash_for(b"function foo() { return 1; }");
+        assert_ne!(tight, loose);
+    }
+
+    #[test]
+    fn source_hash_for_format_is_sixteen_lowercase_hex() {
+        let hash = source_hash_for(b"function foo() { return 1; }");
+        assert_eq!(hash.len(), 16, "expected 16 hex chars, got {hash}");
+        assert!(
+            hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "expected lowercase hex, got {hash}",
+        );
+    }
+
+    #[test]
+    fn source_hash_for_differs_from_sibling_id_helpers() {
+        // Distinctness check parallel to the kind-salt assertions on
+        // finding_id / hot_path_id / blast_radius_id / importance_id /
+        // function_identity_id: source_hash_for hashes a different input
+        // shape (body bytes, not file + name + line + kind salt) so its
+        // output MUST NOT collide with any sibling ID helper's output for
+        // any input. Locks the structural difference even though length
+        // (16 vs 8 hex) and the absent `fallow:` prefix already make the
+        // strings unambiguous.
+        let body = b"function foo() {}";
+        let source = source_hash_for(body);
+        // Sibling helpers prefix `fallow:<kind>:`; source_hash carries no
+        // prefix. Distinctness by construction.
+        assert!(!source.contains(':'));
+        assert_ne!(source, finding_id("src/x.ts", "foo", 1));
+        assert_ne!(source, hot_path_id("src/x.ts", "foo", 1));
+        assert_ne!(source, blast_radius_id("src/x.ts", "foo", 1));
+        assert_ne!(source, importance_id("src/x.ts", "foo", 1));
+        assert_ne!(source, function_identity_id("src/x.ts", "foo", 1));
+    }
+
+    #[test]
+    fn source_hash_for_no_fallow_prefix() {
+        // source_hash is a content tiebreaker, not a qualified ID. The
+        // "fallow:" prefix used by finding_id / hot_path_id / function_identity_id
+        // exists to namespace cross-surface joins; source_hash is consumed
+        // raw and MUST NOT carry the prefix.
+        let hash = source_hash_for(b"function foo() { return 1; }");
+        assert!(
+            !hash.starts_with("fallow:"),
+            "source_hash must not carry the fallow: prefix, got {hash}",
+        );
+    }
+
+    #[test]
+    fn blast_radius_id_anchor_fixture() {
+        // Conformance fixture parallel to function_identity_id_anchor_fixture.
+        // Locks the canonical hash inputs + truncation for blast_radius_id
+        // so producers can self-test agreement with the protocol.
+        assert_eq!(
+            blast_radius_id("src/blast.tsx", "handle", 100),
+            "fallow:blast:d437d3d3",
+        );
+    }
+
+    #[test]
+    fn importance_id_anchor_fixture() {
+        // Conformance fixture parallel to function_identity_id_anchor_fixture.
+        assert_eq!(
+            importance_id("src/importance.tsx", "important", 5),
+            "fallow:importance:38ee86d9",
+        );
     }
 }
