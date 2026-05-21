@@ -15,6 +15,16 @@ typos                                                   # Spellcheck
 
 CI runs `cargo-audit`, `cargo-deny`, `cargo-shear`, `zizmor`, the MSRV job, and `cargo publish --dry-run` on top of that. Run the supply-chain tools locally before opening a PR if you changed `Cargo.toml`.
 
+### Local pre-push hook
+
+Once per clone, opt into the same gates locally:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-push` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `typos .` on every push. `RUN_TESTS=1 git push` also runs `cargo test`. `SKIP_PRE_PUSH=1 git push` bypasses it (use sparingly, e.g. WIP branches for early CI signal).
+
 ## Lint baseline
 
 - `clippy::{all, pedantic, nursery, cargo}` at `warn` with a short, documented allow-list in `Cargo.toml`.
@@ -52,7 +62,7 @@ Do not add `insta`, `proptest`, `rstest`, or similar — tests are small and lit
 
 ## Commit and PR hygiene
 
-- Conventional commits: `feat:`, `fix:`, `chore:`, `refactor:`, `test:`, `docs:`. Breaking wire changes use `feat!:` / `fix!:`.
+- Conventional commits: `feat:`, `fix:`, `chore:`, `refactor:`, `test:`, `docs:`. Breaking wire changes use `feat!:` / `fix!:`. Enforced on push/PR by the `commitlint` workflow against `commitlint.config.mjs` (header <= 100 chars, lower-case type and scope, conventional type set).
 - Signed commits (`git commit -S`) and signed pushes. No AI attribution.
 - One concern per PR. A wire change + an unrelated refactor go in separate PRs.
 - PRs that touch the public surface must update `CHANGELOG.md` under `[Unreleased]`.

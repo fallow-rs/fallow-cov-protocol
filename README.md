@@ -1,7 +1,10 @@
 # fallow-cov-protocol
 
+[![CI](https://github.com/fallow-rs/fallow-cov-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/fallow-rs/fallow-cov-protocol/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/fallow-cov-protocol.svg)](https://crates.io/crates/fallow-cov-protocol)
 [![Docs.rs](https://docs.rs/fallow-cov-protocol/badge.svg)](https://docs.rs/fallow-cov-protocol)
+[![OpenSSF Scorecard](https://api.securityscorecard.dev/projects/github.com/fallow-rs/fallow-cov-protocol/badge)](https://securityscorecard.dev/viewer/?uri=github.com/fallow-rs/fallow-cov-protocol)
+[![License](https://img.shields.io/crates/l/fallow-cov-protocol.svg)](#license)
 
 Versioned JSON envelope types shared between the public [`fallow`](https://github.com/fallow-rs/fallow) CLI and the closed-source `fallow-cov` production-coverage sidecar.
 
