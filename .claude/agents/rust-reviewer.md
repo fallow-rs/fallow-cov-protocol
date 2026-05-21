@@ -21,7 +21,7 @@ Review Rust code changes in the `fallow-cov-protocol` crate. This crate defines 
    - No `unsafe` (forbidden at crate root).
    - No new dependencies unless justified in the PR description.
    - `const fn default_<name>() -> T` for defaults, not closures.
-4. **MSRV**: No use of stdlib/language features newer than Rust 1.75 without an explicit MSRV bump.
+4. **MSRV**: No use of stdlib/language features newer than Rust 1.85 without an explicit MSRV bump.
 5. **Test coverage**: Every new public field / variant / helper has matching tests per `.claude/rules/testing.md`.
 
 ## What NOT to flag

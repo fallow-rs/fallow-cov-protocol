@@ -7,6 +7,13 @@ crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 `.claude/rules/protocol-versioning.md` for the full policy.
 
+## [0.7.1] - 2026-05-21
+
+### Changed
+
+- **MSRV bumped from `1.75` to `1.85`.** Required to consume `sha2 = "0.11"`, whose transitive deps (`hybrid-array`, `cpufeatures`, `block-buffer`, `crypto-common`, `digest`) all declare `edition = "2024"`. Both real consumers of this crate (the `fallow` CLI and the `fallow-cov` sidecar) are already on Rust 1.92, so the bump has no practical downstream impact. Updated `Cargo.toml`, `rust-toolchain.toml`, the `msrv` CI job, and the in-repo docs in lockstep.
+- Bumped `sha2` from `0.10` to `0.11`. No public API change; the hash inputs and `source_hash_for` output format are unchanged.
+
 ## [0.7.0] - 2026-05-21
 
 ### Changed (additive producer constraint)

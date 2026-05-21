@@ -2,5 +2,5 @@
 # Pinned to the crate's declared MSRV so `cargo clippy` / `cargo test` surface
 # the same lints locally that CI enforces on the MSRV job. Bump in lockstep
 # with `rust-version` in Cargo.toml and the `msrv` CI job.
-channel = "1.75"
+channel = "1.85"
 components = ["clippy", "rustfmt"]

@@ -101,7 +101,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.7.0";
+pub const PROTOCOL_VERSION: &str = "0.7.1";
 
 // -- Request envelope -------------------------------------------------------
 

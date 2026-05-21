@@ -7,7 +7,7 @@ Versioned JSON envelope shared between the open-source [`fallow`](https://github
 ```
 src/
   lib.rs            -- Entire public API: Request/Response envelopes, enums, ID helpers, tests
-Cargo.toml          -- Crate metadata, pinned MSRV 1.75, pedantic clippy, unsafe_code = forbid
+Cargo.toml          -- Crate metadata, pinned MSRV 1.85, pedantic clippy, unsafe_code = forbid
 README.md           -- crates.io front page (what/why/versioning/status)
 .claude/            -- Claude Code config: hooks, rules, reviewer agents
 ```
@@ -49,7 +49,7 @@ Both binaries depend on this crate. The CLI writes a `Request` to the sidecar's 
 - Optional fields use `#[serde(default)]`; `Option<T>` fields skip-serialize with `skip_serializing_if = "Option::is_none"` when absent is semantically different from default.
 - Default bools use a named `const fn default_true() -> bool`, not closures, which keeps the wire default auditable.
 - Clippy `pedantic` at `warn` (priority -1), with `module_name_repetitions` and `missing_errors_doc` allowed (tightly scoped crate, every public item is the contract).
-- MSRV pinned to 1.75 in Cargo.toml; do not rely on newer features without bumping it.
+- MSRV pinned to 1.85 in Cargo.toml; do not rely on newer features without bumping it.
 - `missing_docs = "allow"` is a TODO until 1.0.0; new public items should still carry rustdoc.
 
 ## Testing conventions
