@@ -90,6 +90,10 @@
 //!   (full + minimal) plus anchor fixtures for [`blast_radius_id`] and
 //!   [`importance_id`] parallel to the existing
 //!   [`function_identity_id`] fixture.
+//! - [`RiskBand`] and [`CoverageSource`] gain `Unknown` sentinel variants
+//!   with `#[serde(other)]`. Future producers MAY add new variants as
+//!   additive minor bumps; consumers map unseen variants to `Unknown`
+//!   rather than failing deserialization.
 
 #![forbid(unsafe_code)]
 
@@ -145,6 +149,15 @@ pub enum CoverageSource {
         /// Absolute path to the directory containing V8 dump files.
         path: String,
     },
+    /// Sentinel for forward-compatibility with newer producers that add
+    /// coverage source kinds (e.g. `IstanbulDir`, `TraceEvent`,
+    /// `RuntimeBeacon`) the current consumer has not seen yet. Sidecars
+    /// receiving an unknown `kind` map the entry here rather than
+    /// failing deserialization; the payload fields associated with the
+    /// unknown kind are intentionally discarded because the consumer
+    /// would not know how to interpret them. Added in protocol 0.7.0.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Static analysis output the public CLI already produced.
@@ -767,6 +780,12 @@ pub enum RiskBand {
     Medium,
     /// High caller fan-in / traffic-weighted reach.
     High,
+    /// Sentinel for forward-compatibility with newer producers that add
+    /// risk bands (e.g. `Critical`, `Negligible`) the current consumer
+    /// has not seen yet. Older consumers map the unknown variant here
+    /// rather than failing deserialization. Added in protocol 0.7.0.
+    #[serde(other)]
+    Unknown,
 }
 
 /// A function with meaningful static or traffic-weighted blast radius.
@@ -1082,6 +1101,32 @@ mod tests {
         let json = r#""something-else""#;
         let watermark: Watermark = serde_json::from_str(json).unwrap();
         assert!(matches!(watermark, Watermark::Unknown));
+    }
+
+    #[test]
+    fn unknown_risk_band_round_trips() {
+        // Forward-compat sentinel added in protocol 0.7.0. Future
+        // producers MAY add risk bands beyond Low / Medium / High; older
+        // consumers MUST map them to Unknown rather than failing
+        // deserialization. Adding a new variant is a soft minor bump
+        // only because this sentinel is present.
+        let json = r#""critical""#;
+        let band: RiskBand = serde_json::from_str(json).unwrap();
+        assert!(matches!(band, RiskBand::Unknown));
+    }
+
+    #[test]
+    fn unknown_coverage_source_round_trips() {
+        // Forward-compat sentinel added in protocol 0.7.0. Future
+        // producers MAY add coverage source kinds beyond v8 / istanbul /
+        // v8-dir (e.g., istanbul-dir, trace-event, runtime-beacon);
+        // older sidecars MUST map them to Unknown rather than failing
+        // deserialization. The payload fields associated with the
+        // unknown kind are intentionally discarded because the consumer
+        // would not know how to interpret them.
+        let json = r#"{"kind":"trace-event","path":"/tmp/x.trace"}"#;
+        let src: CoverageSource = serde_json::from_str(json).unwrap();
+        assert!(matches!(src, CoverageSource::Unknown));
     }
 
     #[test]
