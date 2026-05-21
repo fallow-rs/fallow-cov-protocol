@@ -73,7 +73,7 @@ Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
   consumer into a hard-fail on the next protocol major that evolves the
   hash inputs.
 - **`Unknown` sentinel variants** on `RiskBand` and `CoverageSource`,
-  closing the last two forward-compat gaps surfaced by a /sweep audit
+  closing the last two forward-compat gaps from a pre-release audit
   of every public enum in the crate. Adds `#[serde(other)] Unknown` to
   both. Future producers MAY add new variants (`Critical` / `Negligible`
   for `RiskBand`; `IstanbulDir` / `TraceEvent` / `RuntimeBeacon` for
