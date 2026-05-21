@@ -44,9 +44,9 @@ Every new wire field requires:
 - `#[serde(default)]` (or `default = "..."`) so old encoders stay valid.
 - `#[serde(skip_serializing_if = "Option::is_none")]` on `Option<T>` when absent-is-observably-different-from-`None`.
 - Rustdoc describing the intended semantics, not just the type.
-- A matching round-trip + forward-compat test in the same PR (see `.claude/rules/testing.md`).
+- A matching round-trip + forward-compat test in the same PR (see the patterns under "Testing conventions" below).
 
-See `.claude/rules/protocol-versioning.md` for the full policy, including the cross-repo release dance.
+The cross-repo release dance for a wire change is: publish this crate, ship a sidecar release that accepts both old and new envelopes, then ship a CLI release that depends on the new version. Never reverse that order, the CLI shipping first breaks users who have not updated their sidecar yet.
 
 ## Testing conventions
 
@@ -75,4 +75,4 @@ Avoid time / path abstraction crates (`chrono`, `camino`, etc.) — the wire is 
 
 ## Review
 
-Reviewer personas live in `.claude/agents/`; the assembly matrix in `.claude/rules/team-assembly.md` describes which reviewers to pull in for which change types. A `BLOCK` from `protocol-reviewer` on an unannounced breaking change is a hard veto.
+Wire-contract changes (new fields, new enum variants, new ID helpers, `PROTOCOL_VERSION` bumps, serde attribute changes) need a closer read than internal refactors. An unannounced breaking change to the public surface is a hard reject; bump the major and call it out in the PR description and CHANGELOG.
