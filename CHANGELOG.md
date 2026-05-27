@@ -7,6 +7,51 @@ crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 `.claude/rules/protocol-versioning.md` for the full policy.
 
+## [0.8.0] - 2026-05-27
+
+### Changed (BREAKING: stable_id recipe)
+
+- **`function_identity_id` recipe reconciled with the cloud store.** The
+  `stable_id` preimage is now NUL-delimited and truncated to 16 hex
+  characters:
+
+  ```
+  stable_id = "fallow:fn:" + SHA-256(file \0 name \0 start_line).hex[:16]
+  ```
+
+  Previously (0.7.x) it was `SHA-256(file + name + start_line + "function")`,
+  plain unseparated UTF-8, truncated to 8 hex. The change adopts the
+  defensive choices the cloud aggregation store (`computeStableId`) was
+  authored with first: NUL delimiters (so `("ab","c")` cannot collide with
+  `("a","bc")`; producers MUST reject NUL bytes in `file` / `name`) and
+  64-bit truncation (birthday-collision-safe for large monorepos, where
+  32-bit becomes risky past ~65k functions per partition). Columns stay
+  excluded, preserving cross-producer agreement (V8 / Istanbul / oxc).
+- **Every `fallow:fn:` value changes.** Persisted ids reset: CI dedup,
+  suppression files, agent cross-references, and cloud `function_hits`
+  rows must be regenerated. Consumers that persist ids MUST run their
+  re-baseline / backfill path on upgrade.
+
+### Added
+
+- **`function_identity_id_v1`** retains the exact 0.7.x recipe for the
+  upgrade grace window. Consumers holding pre-0.8.0 baselines recompute
+  BOTH `function_identity_id` and `function_identity_id_v1` from `file` +
+  `name` + `start_line` and suppress on either match, so findings stay
+  suppressed until the next re-baseline. Marked `#[deprecated]`; producers
+  MUST NOT emit its value on the wire.
+
+### Migration
+
+- Producers (`fallow` CLI, `fallow-cov` sidecar): no code change beyond
+  bumping the `fallow-cov-protocol` dependency to `0.8`; the new recipe is
+  picked up by recompiling against the updated helper.
+- Cloud (`computeStableId`): drop `columnNumber` from the preimage, add the
+  `fallow:fn:` prefix (the NUL delimiter and 16-hex width already match),
+  and backfill `function_hits.stable_id`.
+- Baseline consumers: extend the suppression match with
+  `function_identity_id_v1` for the grace window.
+
 ## [0.7.2] - 2026-05-27
 
 ### Fixed (docs only, no wire change)

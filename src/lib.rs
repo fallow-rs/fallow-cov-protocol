@@ -100,6 +100,20 @@
 //!   gets a new `stable_id`; it is the cross-surface + cross-producer
 //!   join key, not a line-move-immune one. Line-move-tolerant matching
 //!   belongs on the content-based [`FunctionIdentity::source_hash`].
+//!
+//! # 0.8 changes
+//!
+//! - **BREAKING: [`function_identity_id`] recipe reconciled.** The
+//!   `stable_id` preimage is now NUL-delimited (`file \0 name \0
+//!   start_line`) and truncated to 16 hex chars (64 bits) instead of the
+//!   0.7.x unseparated `file + name + start_line + "function"` truncated
+//!   to 8 hex. This matches the cloud aggregation store's recipe (authored
+//!   NUL-delimited + 64-bit first) and keeps the column exclusion. Every
+//!   `fallow:fn:` value changes; persisted ids (CI dedup, suppression
+//!   files, cloud `function_hits`) reset and must be regenerated.
+//!   [`function_identity_id_v1`] retains the 0.7.x recipe for the upgrade
+//!   grace window: consumers recompute both and match either until the
+//!   next re-baseline.
 
 #![forbid(unsafe_code)]
 
@@ -107,7 +121,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.7.2";
+pub const PROTOCOL_VERSION: &str = "0.8.0";
 
 // -- Request envelope -------------------------------------------------------
 
@@ -950,9 +964,12 @@ pub fn importance_id(file: &str, function: &str, line: u32) -> String {
 
 /// Compute the deterministic [`FunctionIdentity::stable_id`] for a function.
 ///
-/// Emits `fallow:fn:<hash>` where `<hash>` is the first 8 hex characters of
-/// `SHA-256(file + name + start_line + "function")`. The concatenation is
-/// plain, unseparated UTF-8.
+/// Emits `fallow:fn:<hash>` where `<hash>` is the first 16 hex characters
+/// (first 8 bytes) of `SHA-256(file \0 name \0 start_line)`. The preimage
+/// is NUL-delimited: the three fields joined by single `0x00` bytes, with
+/// `start_line` rendered as its decimal ASCII string. There is no trailing
+/// salt; the `fallow:fn:` prefix namespaces the value against the
+/// per-surface helpers.
 ///
 /// # Why columns are NOT in the hash
 ///
@@ -965,6 +982,17 @@ pub fn importance_id(file: &str, function: &str, line: u32) -> String {
 /// for display and same-line disambiguation, but are NOT part of the
 /// hash.
 ///
+/// # Why NUL-delimited and 16 hex (0.8.0)
+///
+/// The 0.8.0 recipe reconciles this helper with the cloud aggregation
+/// store, which was authored NUL-delimited and 64-bit first. NUL
+/// delimiters prevent preimage ambiguity (unseparated `file + name` lets
+/// `("ab","c")` collide with `("a","bc")`); producers MUST reject NUL
+/// bytes in `file` / `name` so a delimiter cannot be smuggled into the
+/// input. The 16-hex (64-bit) truncation keeps the birthday-collision
+/// bound safe for large monorepos aggregated over time, where 8 hex
+/// (32-bit) becomes risky past ~65k functions in one partition.
+///
 /// # Why there is no `kind` parameter
 ///
 /// Unlike [`finding_id`] / [`hot_path_id`] / [`blast_radius_id`] /
@@ -973,16 +1001,43 @@ pub fn importance_id(file: &str, function: &str, line: u32) -> String {
 /// function appears on (findings, hot paths, blast radius, importance,
 /// static inventory). That is the whole point of the cross-surface join.
 ///
-/// The canonical input order (`file`, `name`, `start_line`, then the
-/// literal salt `"function"`) and truncation (first 4 SHA-256 bytes
-/// rendered as 8 lowercase hex chars) are part of the wire contract.
-/// Changing any of them breaks ID stability across runs and invalidates
-/// any consumer that persists IDs (CI deduplication, suppression files,
-/// agent cross-references) and is therefore always a major bump.
+/// The canonical preimage, delimiter, and truncation are part of the wire
+/// contract. Changing any of them breaks ID stability across runs and
+/// invalidates any consumer that persists IDs (CI deduplication,
+/// suppression files, agent cross-references) and is therefore always a
+/// major bump. See [`function_identity_id_v1`] for the pre-0.8.0 recipe
+/// kept for the upgrade grace window.
 ///
-/// Added in protocol 0.6.0.
+/// Added in protocol 0.6.0; recipe reconciled in 0.8.0.
 #[must_use]
 pub fn function_identity_id(file: &str, name: &str, start_line: u32) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(file.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(name.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(start_line.to_string().as_bytes());
+    let digest = hasher.finalize();
+    format!("fallow:fn:{}", hex_prefix(&digest, 8))
+}
+
+/// Compute the pre-0.8.0 [`FunctionIdentity::stable_id`] recipe.
+///
+/// Retained ONLY for the 0.8.0 upgrade grace window. A consumer holding
+/// baselines / suppression files written before 0.8.0 recomputes BOTH this
+/// and [`function_identity_id`] from `file` + `name` + `start_line` and
+/// suppresses on either match, so a finding stays suppressed until its
+/// baseline is regenerated. Producers MUST NOT emit this value on the wire.
+///
+/// The 0.7.x recipe was `SHA-256(file + name + start_line + "function")`,
+/// plain unseparated UTF-8, truncated to the first 8 hex characters. The
+/// 0.8.0 recipe (NUL-delimited, 16 hex) never collides with it.
+#[deprecated(
+    since = "0.8.0",
+    note = "pre-0.8.0 grace-window recipe; use function_identity_id for new ids"
+)]
+#[must_use]
+pub fn function_identity_id_v1(file: &str, name: &str, start_line: u32) -> String {
     let mut hasher = Sha256::new();
     hasher.update(file.as_bytes());
     hasher.update(name.as_bytes());
@@ -1080,8 +1135,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_constant_is_v0_7() {
-        assert!(PROTOCOL_VERSION.starts_with("0.7."));
+    fn version_constant_is_v0_8() {
+        assert!(PROTOCOL_VERSION.starts_with("0.8."));
     }
 
     #[test]
@@ -1345,7 +1400,7 @@ mod tests {
         assert!(function.starts_with("fallow:fn:"));
         assert_eq!(blast.len(), "fallow:blast:".len() + 8);
         assert_eq!(importance.len(), "fallow:importance:".len() + 8);
-        assert_eq!(function.len(), "fallow:fn:".len() + 8);
+        assert_eq!(function.len(), "fallow:fn:".len() + 16);
         let suffixes = [
             &finding[finding.len() - 8..],
             &hot[hot.len() - 8..],
@@ -1528,11 +1583,11 @@ mod tests {
     }
 
     #[test]
-    fn function_identity_id_format_is_fallow_fn_8hex() {
+    fn function_identity_id_format_is_fallow_fn_16hex() {
         let id = function_identity_id("src/a.ts", "foo", 42);
         assert!(id.starts_with("fallow:fn:"));
         let hash = &id["fallow:fn:".len()..];
-        assert_eq!(hash.len(), 8, "expected 8 hex chars, got {hash}");
+        assert_eq!(hash.len(), 16, "expected 16 hex chars, got {hash}");
         assert!(
             hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
             "expected lowercase hex, got {hash}"
@@ -1553,7 +1608,26 @@ mod tests {
         // the cross-surface join would silently break in production.
         assert_eq!(
             function_identity_id("src/render.tsx", "render", 42),
+            "fallow:fn:cb4482d6aef7c79a",
+        );
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "grace-window helper is intentionally deprecated; this test pins its legacy 0.7.x output"
+    )]
+    fn function_identity_id_v1_preserves_pre_0_8_recipe() {
+        // Grace window: the v1 helper MUST keep emitting the 0.7.x value so
+        // consumers can match baselines written before the 0.8.0 recipe
+        // change, and it MUST differ from the current recipe.
+        assert_eq!(
+            function_identity_id_v1("src/render.tsx", "render", 42),
             "fallow:fn:43629542",
+        );
+        assert_ne!(
+            function_identity_id_v1("src/render.tsx", "render", 42),
+            function_identity_id("src/render.tsx", "render", 42),
         );
     }
 
@@ -1755,7 +1829,7 @@ mod tests {
         let json = serde_json::to_string(&identity).unwrap();
         assert_eq!(
             json,
-            r#"{"file":"src/render.tsx","name":"render","start_line":42,"start_column":5,"end_line":67,"end_column":2,"source_hash":"e25ba02c5e53651f","resolution":"resolved","stable_id":"fallow:fn:43629542"}"#,
+            r#"{"file":"src/render.tsx","name":"render","start_line":42,"start_column":5,"end_line":67,"end_column":2,"source_hash":"e25ba02c5e53651f","resolution":"resolved","stable_id":"fallow:fn:cb4482d6aef7c79a"}"#,
         );
     }
 
@@ -1780,7 +1854,7 @@ mod tests {
         let json = serde_json::to_string(&identity).unwrap();
         assert_eq!(
             json,
-            r#"{"file":"src/minimal.ts","name":"f","start_line":1,"resolution":"resolved","stable_id":"fallow:fn:a76cfb64"}"#,
+            r#"{"file":"src/minimal.ts","name":"f","start_line":1,"resolution":"resolved","stable_id":"fallow:fn:c919e9ed9a517375"}"#,
         );
     }
 
@@ -1808,7 +1882,7 @@ mod tests {
         let json = serde_json::to_string(&identity).unwrap();
         assert_eq!(
             json,
-            r#"{"file":"src/unresolved.ts","name":"mystery_fn","start_line":42,"resolution":"unresolved","stable_id":"fallow:fn:66db18d1"}"#,
+            r#"{"file":"src/unresolved.ts","name":"mystery_fn","start_line":42,"resolution":"unresolved","stable_id":"fallow:fn:b2a29712f84c4a6e"}"#,
         );
     }
 
