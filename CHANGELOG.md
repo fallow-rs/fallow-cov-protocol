@@ -7,6 +7,31 @@ crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 `.claude/rules/protocol-versioning.md` for the full policy.
 
+## [0.7.2] - 2026-05-27
+
+### Fixed (docs only, no wire change)
+
+- **Corrected the false "stable across line moves" claim on
+  `FunctionIdentity::stable_id`** (issue #17). The rustdoc on
+  `Finding::id` and the 0.6.0 CHANGELOG entry both described
+  `stable_id` as line-move-immune and claimed "suppressions survive
+  line shifts". This was never true: `function_identity_id` hashes
+  `file + name + start_line + "function"`, so moving a function to a
+  new line mints a new `stable_id`, exactly as it mints a new
+  `Finding::id`. The hash inputs, wire shape, and `PROTOCOL_VERSION`
+  semantics are unchanged; only the prose is corrected.
+- **Documented what `stable_id` actually provides**: it is the
+  cross-surface (one value per function across findings / hot-paths /
+  blast-radius / importance) and cross-producer (V8 / Istanbul / oxc
+  agree because columns are excluded from the hash) join key. It is
+  NOT a line-move-immune key.
+- **Added a "which key for which job" explainer** to the `Finding::id`
+  rustdoc covering all three identifiers: `Finding::id` (per-finding
+  suppression), `stable_id` (cross-surface + cross-producer join), and
+  `source_hash` (content tiebreaker, the only one that survives a line
+  move with an unchanged body). Consumers that want line-move-tolerant
+  matching layer `source_hash` on top of `stable_id` when present.
+
 ## [0.7.1] - 2026-05-21
 
 ### Changed
@@ -187,12 +212,18 @@ For downstream Rust consumers of this crate:
 - **Suppression key vs join key.** The two IDs serve different
   axes: `Finding.id` is the per-finding suppression key (hashes the
   current `line`, so it changes when a function moves);
-  `identity.stable_id` is the cross-surface join key (stable across
-  line moves; same function gets one value across findings, hot
-  paths, blast-radius, and importance entries). Agent tooling
-  writing NEW suppression / baseline entries SHOULD prefer
-  `identity.stable_id` when present so suppressions survive line
-  shifts. Readers MUST accept both forms during the grace window.
+  `identity.stable_id` is the cross-surface + cross-producer join key
+  (same function gets one value across findings, hot paths,
+  blast-radius, and importance entries, and across V8 / Istanbul /
+  oxc producers because columns are excluded from the hash). It also
+  hashes `start_line`, so it is NOT immune to line moves: a moved
+  function gets a new `stable_id` just as it gets a new `Finding.id`.
+  (The 0.6.0 entry originally claimed `stable_id` was "stable across
+  line moves"; that was never true and is corrected here per #17.)
+  Agent tooling writing NEW suppression / baseline entries SHOULD
+  prefer `identity.stable_id` when present so one entry correlates
+  the function across every surface. Readers MUST accept both forms
+  during the grace window.
 
 ## [0.3.0] - 2026-04-20
 

@@ -94,6 +94,12 @@
 //!   with `#[serde(other)]`. Future producers MAY add new variants as
 //!   additive minor bumps; consumers map unseen variants to `Unknown`
 //!   rather than failing deserialization.
+//! - 0.7.2 (docs only, no wire change): corrected the rustdoc and
+//!   CHANGELOG claim that [`FunctionIdentity::stable_id`] is "stable
+//!   across line moves". It hashes `start_line`, so a moved function
+//!   gets a new `stable_id`; it is the cross-surface + cross-producer
+//!   join key, not a line-move-immune one. Line-move-tolerant matching
+//!   belongs on the content-based [`FunctionIdentity::source_hash`].
 
 #![forbid(unsafe_code)]
 
@@ -101,7 +107,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.7.1";
+pub const PROTOCOL_VERSION: &str = "0.7.2";
 
 // -- Request envelope -------------------------------------------------------
 
@@ -416,24 +422,34 @@ pub struct Finding {
     /// [`finding_id`] for the canonical helper. Continues to ship through
     /// 0.6 alongside [`Finding::identity`].
     ///
-    /// **`Finding::id` vs [`FunctionIdentity::stable_id`].** They serve
-    /// different join axes and must not be conflated:
+    /// **Which key for which job.** Three identifiers travel with a
+    /// function and serve different axes; do not conflate them:
     ///
-    /// - `Finding::id` is the canonical **per-finding suppression key**.
-    ///   It hashes `file + function + line + "prod"`, so the same function
-    ///   produces a different `id` when its line changes. Agents writing
-    ///   suppression files / baselines / CI dedup state key on this
-    ///   value to suppress THIS specific finding, not every finding on
-    ///   the function.
-    /// - [`FunctionIdentity::stable_id`] is the canonical **cross-surface
-    ///   join key**. The same function gets ONE `stable_id` across
-    ///   findings, hot paths, blast-radius entries, and importance
-    ///   entries. Cloud aggregation, traffic-weighted ranking, and any
-    ///   "show me this function's history" join uses it.
+    /// - `Finding::id` is the **per-finding suppression key**. It hashes
+    ///   `file + function + line + "prod"`, so it changes when the
+    ///   function moves. Agents writing suppression files / baselines /
+    ///   CI dedup key on this to suppress THIS specific finding, not
+    ///   every finding on the function.
+    /// - [`FunctionIdentity::stable_id`] is the **cross-surface +
+    ///   cross-producer join key**. The same function gets ONE value
+    ///   across findings, hot paths, blast-radius entries, and importance
+    ///   entries, and across V8 / Istanbul / oxc producers (columns are
+    ///   excluded from the hash, so producers of differing positional
+    ///   fidelity still agree). Cloud aggregation and any "show me this
+    ///   function's history" join uses it. It hashes `start_line`, so,
+    ///   exactly like `Finding::id`, it is NOT immune to line moves: a
+    ///   function that moves to a new line gets a new `stable_id`.
+    /// - [`FunctionIdentity::source_hash`] is the **content tiebreaker**.
+    ///   It hashes the canonical body bytes and excludes position, so it
+    ///   is the only one of the three that survives a line move with an
+    ///   unchanged body. Optional and absent unless a producer computes
+    ///   it; consumers that want line-move-tolerant matching layer it on
+    ///   top of `stable_id` when present.
     ///
     /// New agent suppression formats SHOULD write `identity.stable_id`
-    /// when present (stable across line moves) AND retain `Finding::id`
-    /// for backwards-compatibility with 0.5-era baselines. Readers MUST
+    /// when present (so one entry correlates the function across every
+    /// surface, not just this one finding) AND retain `Finding::id` for
+    /// backwards-compatibility with 0.5-era baselines. Readers MUST
     /// accept both forms during the grace window.
     pub id: String,
     /// Path to the source file, relative to [`Request::project_root`].
