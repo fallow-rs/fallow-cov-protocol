@@ -52,8 +52,10 @@
 //!   continue to deserialize with `identity: None`; consumers SHOULD prefer
 //!   `identity.stable_id` as the join key when present and fall back to the
 //!   legacy `file` + `function` + `line` triple otherwise.
-//! - New [`function_identity_id`] helper emitting `fallow:fn:<8 hex>`. The
-//!   helper hashes only `file + name + start_line + "function"` (NOT
+//! - New [`function_identity_id`] helper emitting `fallow:fn:<8 hex>` (this
+//!   0.6 recipe was reconciled to a NUL-delimited 16-hex digest in 0.8.0;
+//!   see `# 0.8 changes`). The helper hashes only `file + name +
+//!   start_line + "function"` (NOT
 //!   columns) so producers with different positional fidelity (V8 byte
 //!   offsets vs Istanbul UTF-16 columns vs oxc spans) agree on the join
 //!   key for the same function. Columns survive on the wire as descriptive
@@ -621,9 +623,10 @@ pub enum IdentityResolution {
 ///
 /// # Hash exclusion of columns
 ///
-/// [`function_identity_id`] hashes only `file + name + start_line +
-/// "function"`. Columns, end positions, and `source_hash` are descriptive
-/// metadata for display and same-line disambiguation, but are NOT part of
+/// [`function_identity_id`] hashes only the NUL-delimited `file`, `name`,
+/// and `start_line` (see its rustdoc for the exact 0.8.0 recipe). Columns,
+/// end positions, and `source_hash` are descriptive metadata for display
+/// and same-line disambiguation, but are NOT part of
 /// the hash. Rationale: V8 runtime dumps frequently lack column info,
 /// while Istanbul fnMap and oxc spans always have it. If columns were
 /// hashed, the same function observed by two producers with different
@@ -715,7 +718,7 @@ pub struct FunctionIdentity {
     /// variants and hide the resolution-confidence signal cloud
     /// aggregation needs.
     pub resolution: IdentityResolution,
-    /// Deterministic cross-surface join key of shape `fallow:fn:<8 hex>`.
+    /// Deterministic cross-surface join key of shape `fallow:fn:<16 hex>`.
     /// Producers MUST compute this via [`function_identity_id`] so the
     /// CLI, sidecar, and cloud agree on the value for the same function.
     /// See the struct-level docs for the hash-input rationale.
@@ -1752,7 +1755,7 @@ mod tests {
             "file": "src/a.ts",
             "name": "foo",
             "start_line": 42,
-            "stable_id": "fallow:fn:43629542"
+            "stable_id": "fallow:fn:0123456789abcdef"
         }"#;
         let result: Result<FunctionIdentity, _> = serde_json::from_str(json);
         let err = result
@@ -1777,7 +1780,7 @@ mod tests {
             "start_line": 42,
             "start_column": 5,
             "resolution": "unresolved",
-            "stable_id": "fallow:fn:43629542"
+            "stable_id": "fallow:fn:0123456789abcdef"
         }"#;
         let parsed: FunctionIdentity = serde_json::from_str(json).unwrap();
         assert!(matches!(parsed.resolution, IdentityResolution::Unresolved));
