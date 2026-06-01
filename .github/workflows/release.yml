@@ -1,13 +1,11 @@
 name: Release fallow-cov-protocol
 
 # Triggered by `v*` tags. Runs tests + clippy + fmt + dry-run, then publishes
-# to crates.io using a repo-scoped CARGO_REGISTRY_TOKEN secret. Also cuts a
+# to crates.io using Trusted Publishing through GitHub Actions OIDC. Also cuts a
 # GitHub release with the CHANGELOG slice attached.
 #
-# One-time setup (before the first tag push):
-#   gh secret set CARGO_REGISTRY_TOKEN --repo fallow-rs/fallow-cov-protocol
-# The token can be the same one used by the fallow repo; both publish under
-# the same crates.io owner.
+# One-time setup: register fallow-rs/fallow-cov-protocol + release.yml as a
+# Trusted Publisher for the crate on crates.io.
 #
 # Re-running after a failure: push a new patch tag (e.g. v0.3.1). NEVER
 # force-push a release tag. Every pushed tag is a permanent audit trail.
@@ -44,6 +42,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write # for GitHub release
+      id-token: write # for crates.io Trusted Publishing
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -132,19 +131,16 @@ jobs:
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Authenticate to crates.io
+        if: steps.check_published.outputs.already != 'true'
+        id: crates_io_auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+
       - name: Publish to crates.io
         if: steps.check_published.outputs.already != 'true'
         shell: bash
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        # zizmor: ignore[use-trusted-publishing]
-        # TODO(trusted-publishing): migrate to crates.io OIDC trusted
-        # publishing once the trusted publisher is registered for this
-        # crate on https://crates.io. Requires configuring the trusted
-        # publisher on the crates.io web UI, adding `id-token: write`
-        # permission to this job, and switching to cargo's OIDC-based
-        # publish flow. Token-based publish is the documented bootstrap
-        # path until that infra exists.
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates_io_auth.outputs.token }}
         run: cargo publish
 
       - name: Extract CHANGELOG slice for this version
