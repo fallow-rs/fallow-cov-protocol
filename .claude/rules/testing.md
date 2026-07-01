@@ -33,7 +33,7 @@ If the enum uses `#[serde(rename_all = "kebab-case")]` or a non-default casing, 
 - Determinism: same inputs → same output.
 - Distinctness: sibling helpers produce different IDs for identical inputs (the "kind" salt works).
 - Input sensitivity: changing any hashed input (line, function, file) changes the output.
-- Format: `fallow:<kind>:<8 hex chars>` length/prefix asserted.
+- Format: prefix + hex length asserted. Per-surface helpers emit `fallow:<kind>:<8 hex>`; `FunctionIdentity::stable_id` emits `fallow:fn:<16 hex>` (see the 0.8.0 recipe).
 
 ### `skip_serializing_if` on `Option<T>`
 - With `Some(x)`: the serialized JSON contains the field.

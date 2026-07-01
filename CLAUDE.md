@@ -84,7 +84,7 @@ cargo doc --no-deps --document-private-items      # Docs (catches broken intra-d
 
 - **One file for the whole contract**: keeps grep-ability and review surface small. Do not split until it's genuinely unreadable.
 - **Plain `String` paths, not `PathBuf`**: the wire is JSON; paths are already stringly typed on both sides and `PathBuf` serde is lossy on Windows.
-- **SHA-256 truncated to 8 hex chars for IDs**: short enough to fit in CLI output and CI annotations, long enough to avoid collisions at realistic finding counts.
+- **SHA-256-truncated IDs, two recipes**: per-surface finding IDs (`fallow:prod|hot|blast|importance:<8 hex>`) hash unseparated `file+function+line+kind` and truncate to 8 hex, short enough for CLI output and CI annotations. `FunctionIdentity::stable_id` (`fallow:fn:<16 hex>`) hashes NUL-delimited `file \0 name \0 start_line` and truncates to 16 hex (64-bit), reconciled with the cloud aggregation store in 0.8.0; the wider bound stays collision-safe for large monorepos aggregated over time.
 - **No `thiserror` / `anyhow` dependency**: this crate never produces errors; all fallibility lives on the two binaries that own I/O.
 - **No chrono / time crate**: periods are raw integers (`observation_days`, `deployments_observed`) to keep the dep tree minimal and the wire trivially parseable by non-Rust sidecars.
 
