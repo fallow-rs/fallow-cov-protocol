@@ -21,8 +21,8 @@
 //! [`Finding`] and [`HotPath`] now carries a deterministic [`finding_id`] /
 //! [`hot_path_id`] hash, a full [`Evidence`] block, and — for findings — a
 //! per-function verdict and nullable invocation count. [`Confidence`]
-//! gained `VeryHigh` and `None` variants to match the decision table in
-//! `.internal/spec-production-coverage.md`.
+//! gained `VeryHigh` and `None` variants so every evidence state remains
+//! explicit on the public wire contract.
 //!
 //! [`StaticFunction::static_used`] and [`StaticFunction::test_covered`] are
 //! intentionally required (no `#[serde(default)]`) — a silent default would
@@ -744,9 +744,8 @@ impl FunctionIdentity {
     }
 }
 
-/// Supporting evidence for a [`Finding`]. Mirrors the rows of the decision
-/// table in `.internal/spec-production-coverage.md` so the CLI can render the
-/// "why" behind each verdict without re-deriving it.
+/// Supporting evidence for a [`Finding`]. Carries the public decision inputs
+/// so the CLI can render the "why" behind each verdict without re-deriving it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     /// `"unused"` when the CLI marked the function statically unreachable,
