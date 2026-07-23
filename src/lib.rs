@@ -1138,8 +1138,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_constant_is_v0_8() {
-        assert!(PROTOCOL_VERSION.starts_with("0.8."));
+    fn protocol_version_matches_public_crate_version() {
+        assert_eq!(PROTOCOL_VERSION, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
