@@ -7,6 +7,20 @@ crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 `.claude/rules/protocol-versioning.md` for the full policy.
 
+## [Unreleased]
+
+### Changed
+
+- **License narrowed to MIT**, matching the `fallow` CLI repository. Previous
+  releases up to and including 0.8.0 remain dual-licensed `MIT OR Apache-2.0`
+  on crates.io; the narrowing applies to releases published after this entry.
+  The `LICENSE` file is now present in the repository.
+
+### Added
+
+- `SECURITY.md` (private vulnerability reporting, deserialization threat model,
+  dependency trust boundary) and `CODE_OF_CONDUCT.md`, mirroring `fallow`.
+
 ## [0.8.0] - 2026-05-27
 
 ### Changed (BREAKING: stable_id recipe)

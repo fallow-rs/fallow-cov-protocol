@@ -22,4 +22,4 @@ Early access. Breaking changes until `1.0.0`.
 
 ## License
 
-MIT OR Apache-2.0
+MIT, see [LICENSE](LICENSE).
