@@ -1433,38 +1433,6 @@ mod tests {
     }
 
     #[test]
-    fn function_identity_omits_columns_when_none() {
-        let identity = FunctionIdentity {
-            file: "src/a.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 1,
-            start_column: None,
-            end_line: None,
-            end_column: None,
-            source_hash: None,
-            resolution: IdentityResolution::Unresolved,
-            stable_id: function_identity_id("src/a.ts", "foo", 1),
-        };
-        let json = serde_json::to_string(&identity).unwrap();
-        assert!(
-            !json.contains("start_column"),
-            "expected start_column omitted, got {json}"
-        );
-        assert!(
-            !json.contains("end_line"),
-            "expected end_line omitted, got {json}"
-        );
-        assert!(
-            !json.contains("end_column"),
-            "expected end_column omitted, got {json}"
-        );
-        assert!(
-            !json.contains("source_hash"),
-            "expected source_hash omitted, got {json}"
-        );
-    }
-
-    #[test]
     fn function_identity_round_trips_with_some_columns() {
         let identity = FunctionIdentity {
             file: "src/b.ts".to_owned(),
@@ -1720,11 +1688,11 @@ mod tests {
 
     #[test]
     fn function_identity_full_json_shape_anchor_fixture() {
-        // Byte-equal wire-shape pin. Catches silent
-        // field-reorder regressions and skip_serializing_if drift on the
-        // every-Option-Some path that the omits-when-none test cannot
-        // catch in isolation. Producers and JSON-diff tooling consume this
-        // exact byte sequence; changing the literal is a wire-shape break.
+        // Byte-equal wire-shape pin for the every-Option-Some path. Catches
+        // silent field-reorder regressions and skip_serializing_if drift;
+        // the minimal fixture below pins the all-None path. Producers and
+        // JSON-diff tooling consume this exact byte sequence; changing the
+        // literal is a wire-shape break.
         let identity = fixture_identity_full();
         let json = serde_json::to_string(&identity).unwrap();
         assert_eq!(
@@ -1735,9 +1703,9 @@ mod tests {
 
     #[test]
     fn function_identity_minimal_json_shape_anchor_fixture() {
-        // Byte-equal wire-shape pin for the minimum required surface.
-        // The four skip_serializing_if Options
-        // are absent. Pairs with the full-shape fixture above so a future
+        // Byte-equal wire-shape pin for the minimum required surface: the
+        // four skip_serializing_if Options are absent. Pairs with the
+        // full-shape fixture above so a future
         // PR cannot regress either the Some path or the None path without
         // visibly editing a literal here.
         let identity = FunctionIdentity {
