@@ -48,7 +48,7 @@ Both binaries depend on this crate. The CLI writes a `Request` to the sidecar's 
 - Enum `Unknown` sentinels via `#[serde(other)]` (see `ReportVerdict`, `Verdict`, `Confidence`, `Feature`, `Watermark`).
 - Optional fields use `#[serde(default)]`; `Option<T>` fields skip-serialize with `skip_serializing_if = "Option::is_none"` when absent is semantically different from default.
 - Non-trivial defaults use a named `const fn default_<name>() -> T`, not closures, which keeps the wire default auditable.
-- Clippy `pedantic` at `warn` (priority -1), with `module_name_repetitions` and `missing_errors_doc` allowed (tightly scoped crate, every public item is the contract).
+- Clippy `all`, `pedantic`, `nursery` and `cargo` at `warn` (priority -1), with a short documented allow-list in `Cargo.toml` (tightly scoped crate, every public item is the contract).
 - MSRV pinned to 1.85 in Cargo.toml; do not rely on newer features without bumping it.
 - `missing_docs = "warn"` is a TODO until 1.0.0 (flip to `deny` before the 1.0 cut); new public items should still carry rustdoc.
 

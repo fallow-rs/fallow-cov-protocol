@@ -12,7 +12,7 @@ paths:
 - Dependency surface is intentionally minimal: `serde`, `serde_json`, `sha2`. Adding a new dependency requires a justification in the PR description and a clippy allowlist update if needed. Transitive bloat affects every binary that pulls this crate.
 
 ## Clippy
-- `[lints.clippy] pedantic = { level = "warn", priority = -1 }` is the baseline. Allow-list entries (`module_name_repetitions`, `missing_errors_doc`) are documented in `Cargo.toml`; keep that list short.
+- `[lints.clippy]` puts the `all`, `pedantic`, `nursery` and `cargo` groups at `warn` (priority -1) as the baseline. Allow-list entries are documented in `Cargo.toml`; keep that list short.
 - Suppress lints with `#[expect(clippy::..., reason = "...")]` instead of `#[allow]`, so the suppression fails if the lint becomes unnecessary.
 - Clippy must pass with `--all-targets -- -D warnings` in CI.
 
