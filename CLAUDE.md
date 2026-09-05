@@ -54,15 +54,7 @@ Both binaries depend on this crate. The CLI writes a `Request` to the sidecar's 
 
 ## Testing conventions
 
-Every wire-facing behavior has a unit test in the same `tests` mod in `lib.rs`:
-
-- **Forward-compat**: unknown string variants for every `#[serde(other)]` enum round-trip to `Unknown` (see `unknown_report_verdict_round_trips`, `unknown_verdict_round_trips`, etc.).
-- **Unknown top-level fields** on `Response` deserialize without erroring (`response_allows_unknown_fields`).
-- **Serde rename casing** is exercised (e.g. `coverage_source_kebab_case`).
-- **ID stability**: `finding_id` / `hot_path_id` must be deterministic, must differ between the two kinds for the same inputs, and must change when line number changes (see existing tests).
-- **`skip_serializing_if`** on `Option<T>` fields is verified both ways (present + absent): see `evidence_round_trips_with_untracked_reason` and `evidence_omits_untracked_reason_when_none`.
-
-When adding a new wire field or enum variant, add the matching round-trip + forward-compat test in the same PR. No exceptions.
+All tests live in the single `tests` mod in `lib.rs`. The required categories (forward-compat, unknown fields, casing, stable IDs, `skip_serializing_if`, defaulted fields) and their patterns are in `.claude/rules/testing.md`. When adding a new wire field or enum variant, add the matching round-trip + forward-compat test in the same PR. No exceptions.
 
 ## Building & testing
 

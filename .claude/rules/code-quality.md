@@ -38,7 +38,7 @@ paths:
 - Panicking APIs (`unwrap`, `expect`) on deserialization paths. Tests may use `unwrap()` freely.
 - Time / path abstraction crates (`chrono`, `camino`, etc.). The wire is stringly typed on purpose.
 
-## CI hardening (target state)
-- `permissions: {}` deny-all baseline on all workflows once CI is wired up.
+## CI hardening
+- `permissions: {}` deny-all baseline at the top of every workflow; jobs opt in to the scopes they need.
 - `cargo-shear` for unused dependency detection.
-- `zizmor` on any GitHub Actions we add.
+- `zizmor` audits the workflows themselves.
