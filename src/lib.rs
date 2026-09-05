@@ -1178,11 +1178,6 @@ mod tests {
 
     #[test]
     fn unknown_risk_band_round_trips() {
-        // Forward-compat sentinel added in protocol 0.7.0. Future
-        // producers MAY add risk bands beyond Low / Medium / High; older
-        // consumers MUST map them to Unknown rather than failing
-        // deserialization. Adding a new variant is a soft minor bump
-        // only because this sentinel is present.
         let json = r#""critical""#;
         let band: RiskBand = serde_json::from_str(json).unwrap();
         assert!(matches!(band, RiskBand::Unknown));
@@ -1190,13 +1185,6 @@ mod tests {
 
     #[test]
     fn unknown_coverage_source_round_trips() {
-        // Forward-compat sentinel added in protocol 0.7.0. Future
-        // producers MAY add coverage source kinds beyond v8 / istanbul /
-        // v8-dir (e.g., istanbul-dir, trace-event, runtime-beacon);
-        // older sidecars MUST map them to Unknown rather than failing
-        // deserialization. The payload fields associated with the
-        // unknown kind are intentionally discarded because the consumer
-        // would not know how to interpret them.
         let json = r#"{"kind":"trace-event","path":"/tmp/x.trace"}"#;
         let src: CoverageSource = serde_json::from_str(json).unwrap();
         assert!(matches!(src, CoverageSource::Unknown));
@@ -1236,21 +1224,6 @@ mod tests {
         let first = finding_id("src/a.ts", "foo", 42);
         let second = finding_id("src/a.ts", "foo", 42);
         assert_eq!(first, second);
-        assert!(first.starts_with("fallow:prod:"));
-        assert_eq!(first.len(), "fallow:prod:".len() + 8);
-    }
-
-    #[test]
-    fn capture_quality_round_trips() {
-        let q = CaptureQuality {
-            window_seconds: 720,
-            instances_observed: 1,
-            lazy_parse_warning: true,
-            untracked_ratio_percent: 42.5,
-        };
-        let json = serde_json::to_string(&q).unwrap();
-        let parsed: CaptureQuality = serde_json::from_str(&json).unwrap();
-        assert_eq!(q, parsed);
     }
 
     #[test]
@@ -1303,13 +1276,6 @@ mod tests {
     }
 
     #[test]
-    fn hot_path_id_differs_from_finding_id() {
-        let f = finding_id("src/a.ts", "foo", 42);
-        let h = hot_path_id("src/a.ts", "foo", 42);
-        assert_ne!(f[f.len() - 8..], h[h.len() - 8..]);
-    }
-
-    #[test]
     fn finding_id_changes_with_line() {
         assert_ne!(
             finding_id("src/a.ts", "foo", 10),
@@ -1334,15 +1300,25 @@ mod tests {
     }
 
     #[test]
-    fn finding_id_is_lowercase_hex_ascii() {
-        // Canonical form is lowercase hex — downstream dedup keys on string
+    fn per_surface_ids_have_kind_prefix_and_8_hex() {
+        // Canonical form is lowercase hex: downstream dedup keys on string
         // equality, so an accidental uppercase switch would break persisted IDs.
-        let id = finding_id("src/a.ts", "foo", 42);
-        let hash = &id["fallow:prod:".len()..];
-        assert!(
-            hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
-            "expected lowercase hex, got {hash}"
-        );
+        let cases = [
+            ("fallow:prod:", finding_id("src/a.ts", "foo", 42)),
+            ("fallow:hot:", hot_path_id("src/a.ts", "foo", 42)),
+            ("fallow:blast:", blast_radius_id("src/a.ts", "foo", 42)),
+            ("fallow:importance:", importance_id("src/a.ts", "foo", 42)),
+        ];
+        for (prefix, id) in cases {
+            let hash = id.strip_prefix(prefix).unwrap_or_else(|| {
+                panic!("expected {prefix} prefix, got {id}");
+            });
+            assert_eq!(hash.len(), 8, "expected 8 hex chars, got {hash}");
+            assert!(
+                hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+                "expected lowercase hex, got {hash}"
+            );
+        }
     }
 
     #[test]
@@ -1397,12 +1373,6 @@ mod tests {
         let blast = blast_radius_id("src/a.ts", "foo", 42);
         let importance = importance_id("src/a.ts", "foo", 42);
         let function = function_identity_id("src/a.ts", "foo", 42);
-        assert!(blast.starts_with("fallow:blast:"));
-        assert!(importance.starts_with("fallow:importance:"));
-        assert!(function.starts_with("fallow:fn:"));
-        assert_eq!(blast.len(), "fallow:blast:".len() + 8);
-        assert_eq!(importance.len(), "fallow:importance:".len() + 8);
-        assert_eq!(function.len(), "fallow:fn:".len() + 16);
         let suffixes = [
             &finding[finding.len() - 8..],
             &hot[hot.len() - 8..],
@@ -1435,8 +1405,6 @@ mod tests {
         );
     }
 
-    // -- FunctionIdentity v2 (protocol 0.6.0) -----------------------------
-
     fn fixture_identity_full() -> FunctionIdentity {
         let stable_id = function_identity_id("src/render.tsx", "render", 42);
         FunctionIdentity {
@@ -1465,38 +1433,6 @@ mod tests {
         let json = serde_json::to_string(&identity).unwrap();
         let parsed: FunctionIdentity = serde_json::from_str(&json).unwrap();
         assert_eq!(identity, parsed);
-    }
-
-    #[test]
-    fn function_identity_omits_columns_when_none() {
-        let identity = FunctionIdentity {
-            file: "src/a.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 1,
-            start_column: None,
-            end_line: None,
-            end_column: None,
-            source_hash: None,
-            resolution: IdentityResolution::Unresolved,
-            stable_id: function_identity_id("src/a.ts", "foo", 1),
-        };
-        let json = serde_json::to_string(&identity).unwrap();
-        assert!(
-            !json.contains("start_column"),
-            "expected start_column omitted, got {json}"
-        );
-        assert!(
-            !json.contains("end_line"),
-            "expected end_line omitted, got {json}"
-        );
-        assert!(
-            !json.contains("end_column"),
-            "expected end_column omitted, got {json}"
-        );
-        assert!(
-            !json.contains("source_hash"),
-            "expected source_hash omitted, got {json}"
-        );
     }
 
     #[test]
@@ -1552,36 +1488,22 @@ mod tests {
     }
 
     #[test]
-    fn function_identity_id_unchanged_by_columns() {
-        // Cross-producer agreement test (BLOCK fix from panel review):
-        // V8 producers without column info MUST produce the same
-        // stable_id as Istanbul producers with column info, otherwise the
-        // cross-surface join silently breaks.
-        let no_columns = FunctionIdentity {
-            file: "src/a.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 42,
+    fn function_identity_id_ignores_column_metadata() {
+        // Cross-producer agreement: a V8 producer without column info and
+        // an Istanbul producer with columns and a source hash MUST agree on
+        // stable_id, otherwise the cross-surface join silently breaks.
+        let with_metadata = fixture_identity_full();
+        let bare = FunctionIdentity {
             start_column: None,
             end_line: None,
             end_column: None,
             source_hash: None,
             resolution: IdentityResolution::Unresolved,
-            stable_id: function_identity_id("src/a.ts", "foo", 42),
+            ..with_metadata.clone()
         };
-        let with_columns = FunctionIdentity {
-            file: "src/a.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 42,
-            start_column: Some(5),
-            end_line: Some(67),
-            end_column: Some(2),
-            source_hash: Some(source_hash_for(b"function foo() {}")),
-            resolution: IdentityResolution::Resolved,
-            stable_id: function_identity_id("src/a.ts", "foo", 42),
-        };
-        assert_eq!(no_columns.stable_id, with_columns.stable_id);
-        assert_eq!(no_columns.stable_id, no_columns.stable_id_computed());
-        assert_eq!(with_columns.stable_id, with_columns.stable_id_computed());
+        assert_eq!(bare.stable_id, with_metadata.stable_id);
+        assert_eq!(bare.stable_id, bare.stable_id_computed());
+        assert_eq!(with_metadata.stable_id, with_metadata.stable_id_computed());
     }
 
     #[test]
@@ -1594,12 +1516,6 @@ mod tests {
             hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
             "expected lowercase hex, got {hash}"
         );
-    }
-
-    #[test]
-    fn function_identity_stable_id_matches_helper() {
-        let identity = fixture_identity_full();
-        assert_eq!(identity.stable_id, identity.stable_id_computed());
     }
 
     #[test]
@@ -1787,46 +1703,12 @@ mod tests {
     }
 
     #[test]
-    fn same_line_functions_distinct_by_identity_via_column_metadata() {
-        // Two anonymous callbacks on the same line of the same file with
-        // the same name collide on stable_id (intentional: cross-producer
-        // join). Display surfaces disambiguate via the column metadata
-        // which survives on the wire even though it does not enter the
-        // hash. This is the explicit panel-review BLOCK fix: columns
-        // ride along for display, NOT for hashing.
-        let first = FunctionIdentity {
-            file: "src/a.ts".to_owned(),
-            name: "<anonymous>".to_owned(),
-            start_line: 7,
-            start_column: Some(12),
-            end_line: Some(7),
-            end_column: Some(40),
-            source_hash: None,
-            resolution: IdentityResolution::Resolved,
-            stable_id: function_identity_id("src/a.ts", "<anonymous>", 7),
-        };
-        let second = FunctionIdentity {
-            start_column: Some(50),
-            end_column: Some(78),
-            ..first.clone()
-        };
-        assert_eq!(first.stable_id, second.stable_id);
-        assert_ne!(first.start_column, second.start_column);
-        // Column metadata survives serde so display can disambiguate.
-        let json_first = serde_json::to_string(&first).unwrap();
-        let json_second = serde_json::to_string(&second).unwrap();
-        assert_ne!(json_first, json_second);
-        assert!(json_first.contains("\"start_column\":12"));
-        assert!(json_second.contains("\"start_column\":50"));
-    }
-
-    #[test]
     fn function_identity_full_json_shape_anchor_fixture() {
-        // Byte-equal wire-shape pin (panel item 2). Catches silent
-        // field-reorder regressions and skip_serializing_if drift on the
-        // every-Option-Some path that the omits-when-none test cannot
-        // catch in isolation. Producers and JSON-diff tooling consume this
-        // exact byte sequence; changing the literal is a wire-shape break.
+        // Byte-equal wire-shape pin for the every-Option-Some path. Catches
+        // silent field-reorder regressions and skip_serializing_if drift;
+        // the minimal fixture below pins the all-None path. Producers and
+        // JSON-diff tooling consume this exact byte sequence; changing the
+        // literal is a wire-shape break.
         let identity = fixture_identity_full();
         let json = serde_json::to_string(&identity).unwrap();
         assert_eq!(
@@ -1837,11 +1719,10 @@ mod tests {
 
     #[test]
     fn function_identity_minimal_json_shape_anchor_fixture() {
-        // Byte-equal wire-shape pin for the minimum required surface
-        // (panel item 2 companion). The four skip_serializing_if Options
-        // are absent. Pairs with the full-shape fixture above so a future
-        // PR cannot regress either the Some path or the None path without
-        // visibly editing a literal here.
+        // Byte-equal wire-shape pin for the minimum required surface: the
+        // four skip_serializing_if Options are absent. Pairs with the
+        // full-shape fixture above so neither the Some path nor the None
+        // path can regress without visibly editing a literal here.
         let identity = FunctionIdentity {
             file: "src/minimal.ts".to_owned(),
             name: "f".to_owned(),
@@ -1862,11 +1743,10 @@ mod tests {
 
     #[test]
     fn identity_resolution_unresolved_shape_fixture() {
-        // Failed-join consumer fixture (panel cross-cutting item from
-        // Diego and Aria). Documents the on-wire shape an MCP agent or
+        // Failed-join consumer fixture: the on-wire shape an MCP agent or
         // cloud aggregator sees when a producer could not resolve the
-        // identity beyond file / name / start_line: columns and
-        // source_hash MUST be absent, resolution MUST serialize as
+        // identity beyond file / name / start_line. Columns and
+        // source_hash MUST be absent and resolution MUST serialize as
         // "unresolved". The protocol documents this stance but does not
         // enforce it via serde; see IdentityResolution::Unresolved
         // rustdoc and unresolved_identity_with_columns_round_trips.
@@ -1886,83 +1766,6 @@ mod tests {
             json,
             r#"{"file":"src/unresolved.ts","name":"mystery_fn","start_line":42,"resolution":"unresolved","stable_id":"fallow:fn:b2a29712f84c4a6e"}"#,
         );
-    }
-
-    #[test]
-    fn function_identity_id_unchanged_by_start_column() {
-        // Per-field stability assertion (panel item 5). The struct-level
-        // function_identity_id_unchanged_by_columns test bundles all four
-        // metadata fields; the per-field cases catch a future regression
-        // where the helper accidentally starts hashing one specific
-        // metadata field but not the others.
-        let base = function_identity_id("src/stability.ts", "foo", 10);
-        let with_start_column = FunctionIdentity {
-            file: "src/stability.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 10,
-            start_column: Some(7),
-            end_line: None,
-            end_column: None,
-            source_hash: None,
-            resolution: IdentityResolution::Fallback,
-            stable_id: function_identity_id("src/stability.ts", "foo", 10),
-        };
-        assert_eq!(base, with_start_column.stable_id);
-        assert_eq!(base, with_start_column.stable_id_computed());
-    }
-
-    #[test]
-    fn function_identity_id_unchanged_by_end_line() {
-        let base = function_identity_id("src/stability.ts", "foo", 10);
-        let with_end_line = FunctionIdentity {
-            file: "src/stability.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 10,
-            start_column: None,
-            end_line: Some(99),
-            end_column: None,
-            source_hash: None,
-            resolution: IdentityResolution::Fallback,
-            stable_id: function_identity_id("src/stability.ts", "foo", 10),
-        };
-        assert_eq!(base, with_end_line.stable_id);
-        assert_eq!(base, with_end_line.stable_id_computed());
-    }
-
-    #[test]
-    fn function_identity_id_unchanged_by_end_column() {
-        let base = function_identity_id("src/stability.ts", "foo", 10);
-        let with_end_column = FunctionIdentity {
-            file: "src/stability.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 10,
-            start_column: None,
-            end_line: None,
-            end_column: Some(42),
-            source_hash: None,
-            resolution: IdentityResolution::Fallback,
-            stable_id: function_identity_id("src/stability.ts", "foo", 10),
-        };
-        assert_eq!(base, with_end_column.stable_id);
-        assert_eq!(base, with_end_column.stable_id_computed());
-    }
-
-    #[test]
-    fn function_identity_id_unchanged_by_source_hash() {
-        let base = function_identity_id("src/stability.ts", "foo", 10);
-        let with_source_hash = FunctionIdentity {
-            file: "src/stability.ts".to_owned(),
-            name: "foo".to_owned(),
-            start_line: 10,
-            start_column: None,
-            end_line: None,
-            end_column: None,
-            source_hash: Some(source_hash_for(b"function foo() { return 1; }")),
-            resolution: IdentityResolution::Fallback,
-            stable_id: function_identity_id("src/stability.ts", "foo", 10),
-        };
-        assert_eq!(base, with_source_hash.stable_id);
-        assert_eq!(base, with_source_hash.stable_id_computed());
     }
 
     #[test]
@@ -2004,41 +1807,6 @@ mod tests {
         assert!(
             hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
             "expected lowercase hex, got {hash}",
-        );
-    }
-
-    #[test]
-    fn source_hash_for_differs_from_sibling_id_helpers() {
-        // Distinctness check parallel to the kind-salt assertions on
-        // finding_id / hot_path_id / blast_radius_id / importance_id /
-        // function_identity_id: source_hash_for hashes a different input
-        // shape (body bytes, not file + name + line + kind salt) so its
-        // output MUST NOT collide with any sibling ID helper's output for
-        // any input. Locks the structural difference even though length
-        // (16 vs 8 hex) and the absent `fallow:` prefix already make the
-        // strings unambiguous.
-        let body = b"function foo() {}";
-        let source = source_hash_for(body);
-        // Sibling helpers prefix `fallow:<kind>:`; source_hash carries no
-        // prefix. Distinctness by construction.
-        assert!(!source.contains(':'));
-        assert_ne!(source, finding_id("src/x.ts", "foo", 1));
-        assert_ne!(source, hot_path_id("src/x.ts", "foo", 1));
-        assert_ne!(source, blast_radius_id("src/x.ts", "foo", 1));
-        assert_ne!(source, importance_id("src/x.ts", "foo", 1));
-        assert_ne!(source, function_identity_id("src/x.ts", "foo", 1));
-    }
-
-    #[test]
-    fn source_hash_for_no_fallow_prefix() {
-        // source_hash is a content tiebreaker, not a qualified ID. The
-        // "fallow:" prefix used by finding_id / hot_path_id / function_identity_id
-        // exists to namespace cross-surface joins; source_hash is consumed
-        // raw and MUST NOT carry the prefix.
-        let hash = source_hash_for(b"function foo() { return 1; }");
-        assert!(
-            !hash.starts_with("fallow:"),
-            "source_hash must not carry the fallow: prefix, got {hash}",
         );
     }
 

@@ -47,22 +47,14 @@ Both binaries depend on this crate. The CLI writes a `Request` to the sidecar's 
 - Serde derives on every wire type. Enums use `#[serde(rename_all = "snake_case")]` or `"kebab-case"` explicitly (see `CoverageSource` for kebab, `Verdict`/`Confidence` for snake).
 - Enum `Unknown` sentinels via `#[serde(other)]` (see `ReportVerdict`, `Verdict`, `Confidence`, `Feature`, `Watermark`).
 - Optional fields use `#[serde(default)]`; `Option<T>` fields skip-serialize with `skip_serializing_if = "Option::is_none"` when absent is semantically different from default.
-- Default bools use a named `const fn default_true() -> bool`, not closures, which keeps the wire default auditable.
-- Clippy `pedantic` at `warn` (priority -1), with `module_name_repetitions` and `missing_errors_doc` allowed (tightly scoped crate, every public item is the contract).
+- Non-trivial defaults use a named `const fn default_<name>() -> T`, not closures, which keeps the wire default auditable.
+- Clippy `all`, `pedantic`, `nursery` and `cargo` at `warn` (priority -1), with a short documented allow-list in `Cargo.toml` (tightly scoped crate, every public item is the contract).
 - MSRV pinned to 1.85 in Cargo.toml; do not rely on newer features without bumping it.
-- `missing_docs = "allow"` is a TODO until 1.0.0; new public items should still carry rustdoc.
+- `missing_docs = "warn"` is a TODO until 1.0.0 (flip to `deny` before the 1.0 cut); new public items should still carry rustdoc.
 
 ## Testing conventions
 
-Every wire-facing behavior has a unit test in the same `tests` mod in `lib.rs`:
-
-- **Forward-compat**: unknown string variants for every `#[serde(other)]` enum round-trip to `Unknown` (see `unknown_report_verdict_round_trips`, `unknown_verdict_round_trips`, etc.).
-- **Unknown top-level fields** on `Response` deserialize without erroring (`response_allows_unknown_fields`).
-- **Serde rename casing** is exercised (e.g. `coverage_source_kebab_case`).
-- **ID stability**: `finding_id` / `hot_path_id` must be deterministic, must differ between the two kinds for the same inputs, and must change when line number changes (see existing tests).
-- **`skip_serializing_if`** on `Option<T>` fields is verified both ways (present + absent): see `evidence_round_trips_with_untracked_reason` and `evidence_omits_untracked_reason_when_none`.
-
-When adding a new wire field or enum variant, add the matching round-trip + forward-compat test in the same PR. No exceptions.
+All tests live in the single `tests` mod in `lib.rs`. The required categories (forward-compat, unknown fields, casing, stable IDs, `skip_serializing_if`, defaulted fields) and their patterns are in `.claude/rules/testing.md`. When adding a new wire field or enum variant, add the matching round-trip + forward-compat test in the same PR. No exceptions.
 
 ## Building & testing
 

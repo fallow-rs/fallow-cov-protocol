@@ -12,7 +12,7 @@ paths:
 - Dependency surface is intentionally minimal: `serde`, `serde_json`, `sha2`. Adding a new dependency requires a justification in the PR description and a clippy allowlist update if needed. Transitive bloat affects every binary that pulls this crate.
 
 ## Clippy
-- `[lints.clippy] pedantic = { level = "warn", priority = -1 }` is the baseline. Allow-list entries (`module_name_repetitions`, `missing_errors_doc`) are documented in `Cargo.toml`; keep that list short.
+- `[lints.clippy]` puts the `all`, `pedantic`, `nursery` and `cargo` groups at `warn` (priority -1) as the baseline. Allow-list entries are documented in `Cargo.toml`; keep that list short.
 - Suppress lints with `#[expect(clippy::..., reason = "...")]` instead of `#[allow]`, so the suppression fails if the lint becomes unnecessary.
 - Clippy must pass with `--all-targets -- -D warnings` in CI.
 
@@ -23,7 +23,7 @@ paths:
 - `typos` runs on commit via the hook and in CI. All code, comments, doc strings, and test fixtures must pass. Intentional invalid identifiers in tests should use obviously synthetic names, not misspelled real words.
 
 ## Docs
-- `missing_docs = "allow"` is a temporary crate-level lint relaxation until `1.0.0`. New public items should still carry rustdoc; the lint will be flipped to `deny` before the 1.0 cut.
+- `missing_docs = "warn"` is a temporary crate-level lint relaxation until `1.0.0`. New public items should still carry rustdoc; the lint will be flipped to `deny` before the 1.0 cut.
 - `cargo doc --no-deps --document-private-items` must succeed without warnings. Broken intra-doc links (`[`Foo`]`) count as warnings.
 
 ## Serde discipline
@@ -38,7 +38,7 @@ paths:
 - Panicking APIs (`unwrap`, `expect`) on deserialization paths. Tests may use `unwrap()` freely.
 - Time / path abstraction crates (`chrono`, `camino`, etc.). The wire is stringly typed on purpose.
 
-## CI hardening (target state)
-- `permissions: {}` deny-all baseline on all workflows once CI is wired up.
+## CI hardening
+- `permissions: {}` deny-all baseline at the top of every workflow; jobs opt in to the scopes they need.
 - `cargo-shear` for unused dependency detection.
-- `zizmor` on any GitHub Actions we add.
+- `zizmor` audits the workflows themselves.

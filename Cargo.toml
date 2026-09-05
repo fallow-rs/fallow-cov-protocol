@@ -19,8 +19,6 @@ sha2 = "0.11"
 
 [lints.rust]
 unsafe_code = "forbid"
-unsafe_op_in_unsafe_fn = "warn"
-unused_unsafe = "warn"
 non_ascii_idents = "warn"
 # TODO: flip to "deny" before 1.0.0 publish (see CLAUDE.md).
 missing_docs = "warn"
@@ -47,8 +45,6 @@ empty_drop = "warn"
 empty_structs_with_brackets = "warn"
 rc_buffer = "warn"
 rc_mutex = "warn"
-undocumented_unsafe_blocks = "warn"
-unnecessary_safety_comment = "warn"
 self_named_module_files = "warn"
 allow_attributes_without_reason = "warn"
 filetype_is_file = "warn"

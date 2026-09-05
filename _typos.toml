@@ -4,11 +4,8 @@ extend-exclude = [
     "target/",
 ]
 
-# SHA-256 prefix anchor values used by FunctionIdentity / source_hash_for
-# tests inside src/lib.rs. typos tokenizes hex strings on digit boundaries
-# and would otherwise flag substrings like `ba` (inside e25ba02c5e53651f)
-# as misspellings of `by` / `be`. Each entry is the exact 16-hex output of
-# `source_hash_for` or `function_identity_id` pinned in the test source;
-# changing the test inputs would invalidate the panel-verified anchors.
+# Pinned hash anchor from the tests in src/lib.rs. typos tokenizes hex on
+# digit boundaries and would otherwise flag the `ba` substring as a
+# misspelling of `by` / `be`.
 [default.extend-identifiers]
 e25ba02c5e53651f = "e25ba02c5e53651f"

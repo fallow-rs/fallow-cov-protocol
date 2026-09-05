@@ -1,9 +1,8 @@
 name: CI
 
-# Per-push/PR CI runs the full ubuntu matrix plus MSRV and publish-dry-run.
-# macOS and Windows matrix entries are kept on workflow_dispatch only (10x
-# and 2x billing respectively); the contract is wire-format JSON with no
-# platform-sensitive code, so ubuntu coverage is the meaningful gate.
+# Per-push/PR CI runs the ubuntu matrix plus MSRV and publish-dry-run. The
+# contract is wire-format JSON with no platform-sensitive code, so ubuntu
+# coverage is the meaningful gate; see the matrix below for macOS / Windows.
 
 on:
   push:
