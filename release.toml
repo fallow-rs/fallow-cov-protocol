@@ -1,5 +1,5 @@
 # cargo-release configuration. The actual release flow lives in
-# .claude/skills/release/; this file pins the mechanical knobs so the skill
+# .claude/skills/fallow-cov-protocol-release/; this file pins the mechanical knobs so the skill
 # does not hardcode them.
 
 # Sign tags so the crates.io release is attributable to the maintainer.
