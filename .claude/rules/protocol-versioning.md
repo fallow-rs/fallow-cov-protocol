@@ -41,7 +41,7 @@ Soft changes (minor bump, forward-compatible):
    #[serde(default = "default_true")]
    pub new_flag: bool,
    ```
-   Reuse the existing `default_true()` or add a similarly-named `const fn` — avoid closures.
+   Add a `const fn default_<name>()`; avoid closures.
 
 3. New enum variant on a `Request`/`Response` enum: verify the enum has `#[serde(other)] Unknown`. If not, add it in a separate major bump first.
 

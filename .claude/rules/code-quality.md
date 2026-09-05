@@ -23,7 +23,7 @@ paths:
 - `typos` runs on commit via the hook and in CI. All code, comments, doc strings, and test fixtures must pass. Intentional invalid identifiers in tests should use obviously synthetic names, not misspelled real words.
 
 ## Docs
-- `missing_docs = "allow"` is a temporary crate-level lint relaxation until `1.0.0`. New public items should still carry rustdoc; the lint will be flipped to `deny` before the 1.0 cut.
+- `missing_docs = "warn"` is a temporary crate-level lint relaxation until `1.0.0`. New public items should still carry rustdoc; the lint will be flipped to `deny` before the 1.0 cut.
 - `cargo doc --no-deps --document-private-items` must succeed without warnings. Broken intra-doc links (`[`Foo`]`) count as warnings.
 
 ## Serde discipline

@@ -47,10 +47,10 @@ Both binaries depend on this crate. The CLI writes a `Request` to the sidecar's 
 - Serde derives on every wire type. Enums use `#[serde(rename_all = "snake_case")]` or `"kebab-case"` explicitly (see `CoverageSource` for kebab, `Verdict`/`Confidence` for snake).
 - Enum `Unknown` sentinels via `#[serde(other)]` (see `ReportVerdict`, `Verdict`, `Confidence`, `Feature`, `Watermark`).
 - Optional fields use `#[serde(default)]`; `Option<T>` fields skip-serialize with `skip_serializing_if = "Option::is_none"` when absent is semantically different from default.
-- Default bools use a named `const fn default_true() -> bool`, not closures, which keeps the wire default auditable.
+- Non-trivial defaults use a named `const fn default_<name>() -> T`, not closures, which keeps the wire default auditable.
 - Clippy `pedantic` at `warn` (priority -1), with `module_name_repetitions` and `missing_errors_doc` allowed (tightly scoped crate, every public item is the contract).
 - MSRV pinned to 1.85 in Cargo.toml; do not rely on newer features without bumping it.
-- `missing_docs = "allow"` is a TODO until 1.0.0; new public items should still carry rustdoc.
+- `missing_docs = "warn"` is a TODO until 1.0.0 (flip to `deny` before the 1.0 cut); new public items should still carry rustdoc.
 
 ## Testing conventions
 
