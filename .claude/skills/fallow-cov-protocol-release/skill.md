@@ -9,7 +9,7 @@ Cut a new release of `fallow-cov-protocol`. The crate is the wire contract betwe
 
 - `/fallow-cov-protocol-release patch` (patch bump, 0.7.0 to 0.7.1, backward-compatible bug fix)
 - `/fallow-cov-protocol-release minor` (minor bump, 0.7.0 to 0.8.0, forward-compatible additions; unknown enum variants must already map to the crate's `Unknown` sentinel)
-- `/fallow-cov-protocol-release major` (major bump, e.g. 0.7.0 to 0.8.0 while pre-1.0, or 0.7.0 to 1.0.0 once the contract is locked)
+- `/fallow-cov-protocol-release major` (major bump, 0.7.0 to 1.0.0 once the contract is locked)
 
 **Pre-1.0 caveat:** until 1.0.0, any visible field/enum/type change is effectively a break. Use `minor` bump for breaking changes too, per the README "Status" banner. The major channel only becomes meaningful post-1.0.
 
@@ -69,7 +69,7 @@ The pre-push hook in `.githooks/pre-push` runs fmt + clippy + typos automaticall
 
 ### 6. Commit + tag + push (let CI publish)
 
-This repo has a release workflow (`.github/workflows/release.yml`) that runs `cargo publish` on tag push. Do NOT run `cargo publish` locally; the workflow uses the repo-scoped `CARGO_REGISTRY_TOKEN` secret and an ephemeral runner, and the local credential set is not the source of truth.
+This repo has a release workflow (`.github/workflows/release.yml`) that runs `cargo publish` on tag push. Do NOT run `cargo publish` locally; the workflow mints a short-lived crates.io token per run through Trusted Publishing (GitHub Actions OIDC) on an ephemeral runner, and the local credential set is not the source of truth.
 
 The release commit itself must go through the branch ruleset on `main` (CI + Commit messages must pass; signed commits required). Open a release PR rather than pushing direct:
 
@@ -93,7 +93,7 @@ git push origin "v$NEW_VERSION"
 The tag push triggers `release.yml`, which:
 1. Verifies tag matches `Cargo.toml` version AND `PROTOCOL_VERSION` in `src/lib.rs`
 2. Runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo publish --dry-run`
-3. Publishes to crates.io with `CARGO_REGISTRY_TOKEN`
+3. Publishes to crates.io with a Trusted Publishing (OIDC) token minted for that run
 4. Extracts the matching CHANGELOG slice and creates the GitHub Release
 
 Both commit and tag MUST be signed (`commit -S`, `tag -s`).
