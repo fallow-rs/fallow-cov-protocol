@@ -1221,8 +1221,6 @@ mod tests {
         let first = finding_id("src/a.ts", "foo", 42);
         let second = finding_id("src/a.ts", "foo", 42);
         assert_eq!(first, second);
-        assert!(first.starts_with("fallow:prod:"));
-        assert_eq!(first.len(), "fallow:prod:".len() + 8);
     }
 
     #[test]
@@ -1299,15 +1297,25 @@ mod tests {
     }
 
     #[test]
-    fn finding_id_is_lowercase_hex_ascii() {
-        // Canonical form is lowercase hex — downstream dedup keys on string
+    fn per_surface_ids_have_kind_prefix_and_8_hex() {
+        // Canonical form is lowercase hex: downstream dedup keys on string
         // equality, so an accidental uppercase switch would break persisted IDs.
-        let id = finding_id("src/a.ts", "foo", 42);
-        let hash = &id["fallow:prod:".len()..];
-        assert!(
-            hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
-            "expected lowercase hex, got {hash}"
-        );
+        let cases = [
+            ("fallow:prod:", finding_id("src/a.ts", "foo", 42)),
+            ("fallow:hot:", hot_path_id("src/a.ts", "foo", 42)),
+            ("fallow:blast:", blast_radius_id("src/a.ts", "foo", 42)),
+            ("fallow:importance:", importance_id("src/a.ts", "foo", 42)),
+        ];
+        for (prefix, id) in cases {
+            let hash = id.strip_prefix(prefix).unwrap_or_else(|| {
+                panic!("expected {prefix} prefix, got {id}");
+            });
+            assert_eq!(hash.len(), 8, "expected 8 hex chars, got {hash}");
+            assert!(
+                hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+                "expected lowercase hex, got {hash}"
+            );
+        }
     }
 
     #[test]
@@ -1362,12 +1370,6 @@ mod tests {
         let blast = blast_radius_id("src/a.ts", "foo", 42);
         let importance = importance_id("src/a.ts", "foo", 42);
         let function = function_identity_id("src/a.ts", "foo", 42);
-        assert!(blast.starts_with("fallow:blast:"));
-        assert!(importance.starts_with("fallow:importance:"));
-        assert!(function.starts_with("fallow:fn:"));
-        assert_eq!(blast.len(), "fallow:blast:".len() + 8);
-        assert_eq!(importance.len(), "fallow:importance:".len() + 8);
-        assert_eq!(function.len(), "fallow:fn:".len() + 16);
         let suffixes = [
             &finding[finding.len() - 8..],
             &hot[hot.len() - 8..],
@@ -1427,6 +1429,7 @@ mod tests {
     #[test]
     fn function_identity_round_trips_with_all_fields_set() {
         let identity = fixture_identity_full();
+        assert_eq!(identity.stable_id_computed(), identity.stable_id);
         let json = serde_json::to_string(&identity).unwrap();
         let parsed: FunctionIdentity = serde_json::from_str(&json).unwrap();
         assert_eq!(identity, parsed);
@@ -1494,12 +1497,6 @@ mod tests {
             hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
             "expected lowercase hex, got {hash}"
         );
-    }
-
-    #[test]
-    fn function_identity_stable_id_matches_helper() {
-        let identity = fixture_identity_full();
-        assert_eq!(identity.stable_id, identity.stable_id_computed());
     }
 
     #[test]
