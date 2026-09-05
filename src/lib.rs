@@ -1096,7 +1096,10 @@ fn content_hash(file: &str, function: &str, line: u32, kind: &str) -> String {
 /// Encode the first `bytes` bytes of `digest` as lowercase hex, returning
 /// a `2 * bytes`-character string. Kept as a single helper so every
 /// truncation length used by the wire contract is auditable from one
-/// place.
+/// place. Total by construction: `HEX` is ASCII and `char::from(u8)` is
+/// infallible, so the helper never panics. If `bytes > digest.len()` the
+/// iterator silently caps at `digest.len()`; the SHA-256 callers all
+/// satisfy `bytes <= 32`.
 fn hex_prefix(digest: &[u8], bytes: usize) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes * 2);
@@ -1402,8 +1405,6 @@ mod tests {
         );
     }
 
-    // -- FunctionIdentity v2 (protocol 0.6.0) -----------------------------
-
     fn fixture_identity_full() -> FunctionIdentity {
         let stable_id = function_identity_id("src/render.tsx", "render", 42);
         FunctionIdentity {
@@ -1429,7 +1430,6 @@ mod tests {
     #[test]
     fn function_identity_round_trips_with_all_fields_set() {
         let identity = fixture_identity_full();
-        assert_eq!(identity.stable_id_computed(), identity.stable_id);
         let json = serde_json::to_string(&identity).unwrap();
         let parsed: FunctionIdentity = serde_json::from_str(&json).unwrap();
         assert_eq!(identity, parsed);
@@ -1485,6 +1485,25 @@ mod tests {
             function_identity_id("src/a.ts", "foo", 10),
             function_identity_id("src/a.ts", "foo", 11),
         );
+    }
+
+    #[test]
+    fn function_identity_id_ignores_column_metadata() {
+        // Cross-producer agreement: a V8 producer without column info and
+        // an Istanbul producer with columns and a source hash MUST agree on
+        // stable_id, otherwise the cross-surface join silently breaks.
+        let with_metadata = fixture_identity_full();
+        let bare = FunctionIdentity {
+            start_column: None,
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Unresolved,
+            ..with_metadata.clone()
+        };
+        assert_eq!(bare.stable_id, with_metadata.stable_id);
+        assert_eq!(bare.stable_id, bare.stable_id_computed());
+        assert_eq!(with_metadata.stable_id, with_metadata.stable_id_computed());
     }
 
     #[test]
@@ -1702,9 +1721,8 @@ mod tests {
     fn function_identity_minimal_json_shape_anchor_fixture() {
         // Byte-equal wire-shape pin for the minimum required surface: the
         // four skip_serializing_if Options are absent. Pairs with the
-        // full-shape fixture above so a future
-        // PR cannot regress either the Some path or the None path without
-        // visibly editing a literal here.
+        // full-shape fixture above so neither the Some path nor the None
+        // path can regress without visibly editing a literal here.
         let identity = FunctionIdentity {
             file: "src/minimal.ts".to_owned(),
             name: "f".to_owned(),
@@ -1720,6 +1738,33 @@ mod tests {
         assert_eq!(
             json,
             r#"{"file":"src/minimal.ts","name":"f","start_line":1,"resolution":"resolved","stable_id":"fallow:fn:c919e9ed9a517375"}"#,
+        );
+    }
+
+    #[test]
+    fn identity_resolution_unresolved_shape_fixture() {
+        // Failed-join consumer fixture: the on-wire shape an MCP agent or
+        // cloud aggregator sees when a producer could not resolve the
+        // identity beyond file / name / start_line. Columns and
+        // source_hash MUST be absent and resolution MUST serialize as
+        // "unresolved". The protocol documents this stance but does not
+        // enforce it via serde; see IdentityResolution::Unresolved
+        // rustdoc and unresolved_identity_with_columns_round_trips.
+        let identity = FunctionIdentity {
+            file: "src/unresolved.ts".to_owned(),
+            name: "mystery_fn".to_owned(),
+            start_line: 42,
+            start_column: None,
+            end_line: None,
+            end_column: None,
+            source_hash: None,
+            resolution: IdentityResolution::Unresolved,
+            stable_id: function_identity_id("src/unresolved.ts", "mystery_fn", 42),
+        };
+        let json = serde_json::to_string(&identity).unwrap();
+        assert_eq!(
+            json,
+            r#"{"file":"src/unresolved.ts","name":"mystery_fn","start_line":42,"resolution":"unresolved","stable_id":"fallow:fn:b2a29712f84c4a6e"}"#,
         );
     }
 
