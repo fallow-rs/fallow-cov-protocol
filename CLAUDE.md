@@ -1,6 +1,6 @@
-# fallow-cov-protocol: Wire contract for Fallow Runtime
+# fallow-cov-protocol: Wire contract for Fallow Cloud
 
-Versioned JSON envelope shared between the open-source [`fallow`](https://github.com/fallow-rs/fallow) CLI and the closed-source `fallow-cov` production-coverage sidecar (the collection engine behind Fallow Runtime, the runtime intelligence layer for fallow). This crate is the single source of truth for the request/response shape so the two repositories cannot drift.
+Versioned JSON envelope shared between the open-source [`fallow`](https://github.com/fallow-rs/fallow) CLI and the closed-source `fallow-cov` production-coverage sidecar (the collection engine behind Fallow Cloud, the paid product that adds production data to fallow). This crate is the single source of truth for the request/response shape so the two repositories cannot drift.
 
 ## Project structure
 
