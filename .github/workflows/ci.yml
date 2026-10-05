@@ -32,7 +32,7 @@ jobs:
       matrix:
         # ubuntu is always included; macOS (10x billing) and Windows (2x) only
         # on manual dispatch while the Actions quota is tight.
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-26.04","macos-latest","windows-latest"]') || fromJSON('["ubuntu-26.04"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,7 +58,7 @@ jobs:
 
   doc:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -76,7 +76,7 @@ jobs:
 
   typos:
     name: Typos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -88,7 +88,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -101,7 +101,7 @@ jobs:
 
   deny:
     name: Cargo Deny
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -113,7 +113,7 @@ jobs:
 
   shear:
     name: Unused Dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -126,7 +126,7 @@ jobs:
 
   zizmor:
     name: Actions Security
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -139,7 +139,7 @@ jobs:
 
   msrv:
     name: MSRV (1.85)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -158,7 +158,7 @@ jobs:
 
   publish-dry-run:
     name: Publish (dry run)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -175,7 +175,7 @@ jobs:
     name: CI
     if: always()
     needs: [check, doc, typos, audit, deny, shear, zizmor, msrv, publish-dry-run]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}
     steps:
