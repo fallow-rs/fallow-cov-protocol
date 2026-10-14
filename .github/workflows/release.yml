@@ -36,13 +36,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  publish:
-    name: Publish to crates.io
+  validate:
+    name: Validate release
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
-      contents: write # for GitHub release
-      id-token: write # for crates.io Trusted Publishing
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.source.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +56,22 @@ jobs:
           # GitHub release creation uses the explicit GH_TOKEN env var below;
           # no need for the auto-persisted token to stick around on disk.
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify source is a release tag from main
+        id: source
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          SELECTED_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_REF" == refs/heads/main || "$WORKFLOW_REF" == refs/tags/v* ]]
+          tag="${SELECTED_REF#refs/tags/}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$tag^{commit}")"
+          git merge-base --is-ancestor HEAD origin/main
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Extract version from tag
         id: version
@@ -99,10 +118,6 @@ jobs:
             exit 1
           fi
 
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-        with:
-          key: release
-
       - name: Run tests
         run: cargo test --all-targets
 
@@ -115,11 +130,26 @@ jobs:
       - name: Cargo publish dry-run
         run: cargo publish --dry-run
 
+  publish:
+    name: Publish to crates.io
+    needs: validate
+    environment: release
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+
       - name: Check if version is already published on crates.io
         id: check_published
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
@@ -141,14 +171,14 @@ jobs:
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates_io_auth.outputs.token }}
-        run: cargo publish
+        run: cargo publish --no-verify
 
       - name: Extract CHANGELOG slice for this version
         id: changelog
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           # CHANGELOG uses `## [X.Y.Z] - YYYY-MM-DD` headers (Keep a
@@ -176,7 +206,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.validate.outputs.tag }}
           TITLE: ${{ steps.changelog.outputs.title }}
           BODY: ${{ steps.changelog.outputs.body }}
         run: |
