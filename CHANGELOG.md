@@ -15,6 +15,10 @@ Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
   releases up to and including 0.8.0 remain dual-licensed `MIT OR Apache-2.0`
   on crates.io; the narrowing applies to releases published after this entry.
   The `LICENSE` file is now present in the repository.
+- **MSRV bumped from `1.85` to `1.96`**, the same as the `fallow` CLI. The
+  `sha2` requirement is relaxed from `=0.11.0` to `0.11`, because the exact
+  pin only kept Rust 1.85 support. `rust-toolchain.toml` now pins Rust
+  1.99.0 for lint and format, separate from the MSRV.
 
 ### Added
 
