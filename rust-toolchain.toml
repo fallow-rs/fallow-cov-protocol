@@ -1,6 +1,6 @@
 [toolchain]
-# Pinned to the crate's declared MSRV so `cargo clippy` / `cargo test` surface
-# the same lints locally that CI enforces on the MSRV job. Bump in lockstep
-# with `rust-version` in Cargo.toml and the `msrv` CI job.
-channel = "1.85"
+# Pinned so local builds lint and format with the same toolchain as CI. The
+# MSRV is declared in `rust-version` in Cargo.toml and enforced by the `msrv`
+# CI job; bump it there, not here.
+channel = "1.99.0"
 components = ["clippy", "rustfmt"]
