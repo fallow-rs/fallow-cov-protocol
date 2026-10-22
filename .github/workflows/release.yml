@@ -152,14 +152,23 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
+          # crates.io answers a request without a user agent with HTTP 403.
           STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            --user-agent "fallow-cov-protocol-release (https://github.com/fallow-rs/fallow-cov-protocol)" \
             "https://crates.io/api/v1/crates/fallow-cov-protocol/${VERSION}")
-          if [ "$STATUS" = "200" ]; then
-            echo "already=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::fallow-cov-protocol ${VERSION} is already on crates.io; skipping cargo publish"
-          else
-            echo "already=false" >> "$GITHUB_OUTPUT"
-          fi
+          case "$STATUS" in
+            200)
+              echo "already=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::fallow-cov-protocol ${VERSION} is already on crates.io; skipping cargo publish"
+              ;;
+            404)
+              echo "already=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::crates.io lookup for fallow-cov-protocol ${VERSION} failed with HTTP ${STATUS}"
+              exit 1
+              ;;
+          esac
 
       - name: Authenticate to crates.io
         if: steps.check_published.outputs.already != 'true'
