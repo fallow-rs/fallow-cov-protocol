@@ -9,6 +9,8 @@ Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-03
+
 ### Changed
 
 - **License narrowed to MIT**, matching the `fallow` CLI repository. Previous

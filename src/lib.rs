@@ -116,6 +116,19 @@
 //!   [`function_identity_id_v1`] retains the 0.7.x recipe for the upgrade
 //!   grace window: consumers recompute both and match either until the
 //!   next re-baseline.
+//!
+//! # 0.9 changes
+//!
+//! - Optional runtime signal fields from the Fallow Cloud runtime-context
+//!   v1 shape. [`Finding`] gets `repo_path`, `covered_by_test`,
+//!   `period_tracking_state`, `errors`, `performance` and `branches`.
+//!   [`BlastRadiusEntry`] gets `production_callers`. All fields are
+//!   additive: an absent field and `null` both read as `None`, so 0.8-shape
+//!   envelopes deserialize unchanged. Each new enum has an `Unknown`
+//!   sentinel and each new struct is `#[non_exhaustive]`. Inside a signal
+//!   object, a count that was not measured is `null`, never zero. Every
+//!   signal is context only: it never changes a verdict, a confidence or
+//!   a risk band.
 
 #![forbid(unsafe_code)]
 
@@ -123,7 +136,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current protocol version. Bumped per the semver rules above.
-pub const PROTOCOL_VERSION: &str = "0.8.0";
+pub const PROTOCOL_VERSION: &str = "0.9.0";
 
 // -- Request envelope -------------------------------------------------------
 
