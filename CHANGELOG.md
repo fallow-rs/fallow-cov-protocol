@@ -22,6 +22,22 @@ Pre-1.0 minor bumps may still contain breaking changes; see `CLAUDE.md` and
 
 ### Added
 
+- **Runtime signal fields** from the Fallow Cloud runtime-context v1 shape.
+  All fields are optional and additive, so older readers and older
+  producers keep working. A reader gets `None` for an absent field and for
+  `null`. Every signal is context only: it never changes a verdict, a
+  confidence or a risk band.
+  - `Finding` gets `repo_path`, `covered_by_test`, `period_tracking_state`,
+    `errors`, `performance` (with `cpu` and `browser`) and `branches`.
+  - `BlastRadiusEntry` gets `production_callers`.
+  - New types: `TrackingState`, `SignalState`, `ErrorState`,
+    `BreakdownState`, `BranchUsageState`, `BranchRangeKind`,
+    `FunctionErrors`, `ErrorTop`, `ErrorBreakdown`, `RouteEvents`,
+    `HandledEvents`, `Performance`, `CpuUsage`, `BrowserPerformance`,
+    `BranchUsage`, `NeverRunRange` and `ProductionCaller`. Each new enum has
+    an `Unknown` sentinel. Each new struct is `#[non_exhaustive]`.
+  - Inside a signal object, a count that was not measured serializes as
+    `null`, never as zero, the same as on the cloud wire.
 - `SECURITY.md` (private vulnerability reporting, deserialization threat model,
   dependency trust boundary) and `CODE_OF_CONDUCT.md`, mirroring `fallow`.
 

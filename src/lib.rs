@@ -495,6 +495,41 @@ pub struct Finding {
     /// for the canonical join semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<FunctionIdentity>,
+    /// Path of the file relative to the repository root, with forward
+    /// slashes and no leading slash. The cloud removes the runtime path
+    /// prefix (for example `/app`) that it proved for the deployment.
+    /// `None` when the producer does not send it, or when no prefix is
+    /// proven for an absolute runtime path. Added after protocol 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_path: Option<String>,
+    /// Test protection signal. `Some(true)`: a test or CI run called the
+    /// function. `Some(false)`: a test or CI run tracked it with zero calls,
+    /// and production has evidence for it. `None`: unknown, never
+    /// "untested". Context only, never a verdict input. Added after
+    /// protocol 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_by_test: Option<bool>,
+    /// Tracking state over the whole observation period, earlier
+    /// deployments included. `Called` when the function ran in any
+    /// deployment of the period. `None` when the producer does not send
+    /// it. Added after protocol 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period_tracking_state: Option<TrackingState>,
+    /// Production errors attributed to the function in the read window.
+    /// Context only. Added after protocol 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub errors: Option<FunctionErrors>,
+    /// CPU time and browser long animation frame time of the function.
+    /// The cloud sends `null` for a function without a stable id; readers
+    /// get `None` for `null` and for an absent field. Context only. Added
+    /// after protocol 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub performance: Option<Performance>,
+    /// Branch-level usage: the ranges of the function that never ran.
+    /// The cloud sends `null` when branch usage is off. Context only.
+    /// Added after protocol 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branches: Option<BranchUsage>,
 }
 
 /// Per-finding verdict. Replaces the 0.1 `CallState` enum.
@@ -852,6 +887,14 @@ pub struct BlastRadiusEntry {
     /// forward-compat with 0.5-shape sidecars.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<FunctionIdentity>,
+    /// Project functions that called this function in the production CPU
+    /// profiles, most edge samples first. The cloud sends `null` when the
+    /// deployment has no CPU profile in the window; readers get `None` for
+    /// `null` and for an absent field. Context only: the static callers
+    /// stay the input of [`BlastRadiusEntry::risk_band`]. Added after
+    /// protocol 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_callers: Option<Vec<ProductionCaller>>,
 }
 
 /// A function ranked by runtime traffic, complexity, and ownership risk.
@@ -885,6 +928,311 @@ pub struct ImportanceEntry {
     /// forward-compat with 0.5-shape sidecars.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<FunctionIdentity>,
+}
+
+// -- Runtime signals ---------------------------------------------------------
+//
+// The types below copy the runtime-context v1 wire shape of Fallow Cloud
+// (snake_case keys). Every signal is context only: it never changes a
+// verdict, a confidence or a risk band. A count that was not measured is
+// `null`, never zero, so the inner `Option` fields serialize as `null`
+// instead of being left out.
+
+/// Three-state tracking of one function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingState {
+    /// The function ran at least once.
+    Called,
+    /// The function was tracked and never ran.
+    NeverCalled,
+    /// No evidence for the function.
+    Untracked,
+    /// Sentinel for forward-compatibility.
+    #[serde(other)]
+    Unknown,
+}
+
+/// State of a sampled signal (CPU time, browser frame time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalState {
+    /// The numbers are set.
+    Tracked,
+    /// Data exists, but there are too few samples to give a number.
+    Insufficient,
+    /// No data for the function in the window.
+    Untracked,
+    /// Sentinel for forward-compatibility.
+    #[serde(other)]
+    Unknown,
+}
+
+/// State of the error signal of one function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorState {
+    /// The counts are exact for the window.
+    Tracked,
+    /// No error capture that can be tied to the function. Counts are null.
+    Untracked,
+    /// Sentinel for forward-compatibility.
+    #[serde(other)]
+    Unknown,
+}
+
+/// State of the error breakdown per route, source and handled value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BreakdownState {
+    /// Every event of the group has a split.
+    Tracked,
+    /// Some events of the group have a split.
+    Partial,
+    /// No event has a split. Counts are null.
+    Untracked,
+    /// Sentinel for forward-compatibility.
+    #[serde(other)]
+    Unknown,
+}
+
+/// State of the branch-level usage of one function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchUsageState {
+    /// The function ran often enough to report never-run ranges.
+    Observed,
+    /// Block data exists, but the function ran too few times.
+    Insufficient,
+    /// No block data for the function.
+    Untracked,
+    /// Sentinel for forward-compatibility.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Kind of a branch range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchRangeKind {
+    /// A span of code.
+    Block,
+    /// The else path of an `if` without an `else`: a zero-width point at
+    /// the end of the `if` statement.
+    ImplicitElse,
+    /// Sentinel for forward-compatibility.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Production errors of one function in the read window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct FunctionErrors {
+    /// Whether the counts below are measured.
+    pub state: ErrorState,
+    /// Distinct error groups. `None` when untracked.
+    #[serde(default)]
+    pub groups: Option<u64>,
+    /// Error events. `None` when untracked.
+    #[serde(default)]
+    pub events: Option<u64>,
+    /// The group with the most events in the window.
+    #[serde(default)]
+    pub top: Option<ErrorTop>,
+}
+
+/// The error group of a function with the most events in the window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ErrorTop {
+    /// Opaque id of the error group.
+    pub group_id: String,
+    /// Error type, for example `TypeError`. One plain line.
+    #[serde(rename = "type")]
+    pub error_type: String,
+    /// Scrubbed error message. One plain line.
+    pub message: String,
+    /// Events of the group in the window.
+    pub count: u64,
+    /// Commit SHA of the deployment that first reported the group.
+    #[serde(default)]
+    pub first_seen_sha: Option<String>,
+    /// Link to the trace of the newest sample, when the repository has a
+    /// trace URL template.
+    #[serde(default)]
+    pub trace_url: Option<String>,
+    /// Route of the newest sample only, not of every event.
+    #[serde(default)]
+    pub sample_route: Option<String>,
+    /// Events of the group per route, source and handled value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breakdown: Option<ErrorBreakdown>,
+}
+
+/// Events of one error group per route, source and handled value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ErrorBreakdown {
+    /// Whether the counts below are measured.
+    pub state: BreakdownState,
+    /// Events with a split.
+    #[serde(default)]
+    pub events: Option<u64>,
+    /// The routes with the most events. A `None` route counts the events
+    /// without a route.
+    #[serde(default)]
+    pub routes: Option<Vec<RouteEvents>>,
+    /// Events of routes that are not in `routes`.
+    #[serde(default)]
+    pub other: Option<u64>,
+    /// Events whose route the beacon did not send.
+    #[serde(default)]
+    pub withheld: Option<u64>,
+    /// Events per error source (`uncaught`, `unhandled_rejection`,
+    /// `captured`, `framework`). A map, so a new source does not fail
+    /// deserialization.
+    #[serde(default)]
+    pub sources: Option<std::collections::BTreeMap<String, u64>>,
+    /// Events per handled value.
+    #[serde(default)]
+    pub handled: Option<HandledEvents>,
+}
+
+/// Events of one route in an [`ErrorBreakdown`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RouteEvents {
+    /// The scrubbed route. `None` for events without a route.
+    #[serde(default)]
+    pub route: Option<String>,
+    /// Events of the route.
+    pub events: u64,
+}
+
+/// Handled and unhandled events in an [`ErrorBreakdown`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HandledEvents {
+    /// Events that application code caught and reported.
+    pub handled: u64,
+    /// Events that no application code caught.
+    pub unhandled: u64,
+}
+
+/// Performance signals of one function.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Performance {
+    /// CPU time from the production CPU profiler.
+    #[serde(default)]
+    pub cpu: Option<CpuUsage>,
+    /// Long animation frame time in the browser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserPerformance>,
+}
+
+/// CPU time of one function, per hour of profiled wall time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct CpuUsage {
+    /// Whether the numbers below are set.
+    pub state: SignalState,
+    /// CPU milliseconds in the function itself per profiled hour.
+    #[serde(default)]
+    pub self_ms_per_hour: Option<f64>,
+    /// CPU milliseconds with the function anywhere on the stack per
+    /// profiled hour.
+    #[serde(default)]
+    pub total_ms_per_hour: Option<f64>,
+    /// Self samples over the non-idle samples of the process, 0 to 1.
+    #[serde(default)]
+    pub share_of_process: Option<f64>,
+    /// Samples with the function on the stack.
+    #[serde(default)]
+    pub samples: Option<u64>,
+}
+
+/// Long animation frame time of one function in the browser, per hour of
+/// visible page time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct BrowserPerformance {
+    /// Whether the numbers below are set.
+    pub state: SignalState,
+    /// Script milliseconds inside long animation frames per hour.
+    #[serde(default)]
+    pub long_frame_ms_per_hour: Option<f64>,
+    /// Forced style and layout milliseconds per hour.
+    #[serde(default)]
+    pub forced_layout_ms_per_hour: Option<f64>,
+    /// Script entries of the function in long frames.
+    #[serde(default)]
+    pub entries: Option<u64>,
+    /// Share of all script time in long frames, 0 to 1.
+    #[serde(default)]
+    pub share_of_script_time: Option<f64>,
+}
+
+/// Branch-level usage of one function.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct BranchUsage {
+    /// Whether the counts below are measured.
+    pub state: BranchUsageState,
+    /// Branch ranges of the function. Set only when observed.
+    #[serde(default)]
+    pub ranges_total: Option<u32>,
+    /// Ranges that never ran. Set only when observed.
+    #[serde(default)]
+    pub ranges_never_run: Option<u32>,
+    /// The ranges that never ran, capped by the producer.
+    #[serde(default)]
+    pub never_run: Vec<NeverRunRange>,
+    /// `true` when the producer cut `never_run` at its cap.
+    #[serde(default)]
+    pub never_run_truncated: bool,
+    /// Calls of the function in the window.
+    #[serde(default)]
+    pub function_calls: Option<u64>,
+}
+
+/// A source range of a function that never ran. Lines are 1-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NeverRunRange {
+    /// Start line of the range.
+    pub start_line: u32,
+    /// Start column of the range.
+    pub start_column: u32,
+    /// End line of the range.
+    pub end_line: u32,
+    /// End column of the range.
+    pub end_column: u32,
+    /// Kind of the range. A producer without kinds sends only blocks.
+    #[serde(default = "default_branch_range_kind")]
+    pub kind: BranchRangeKind,
+}
+
+const fn default_branch_range_kind() -> BranchRangeKind {
+    BranchRangeKind::Block
+}
+
+/// A project function that called another function in the production CPU
+/// profiles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ProductionCaller {
+    /// Stable id of the calling function (`fallow:fn:<16 hex>`).
+    pub stable_id: String,
+    /// Path of the file of the calling function.
+    pub file: String,
+    /// Name of the calling function.
+    pub function: String,
+    /// 1-indexed line the calling function starts on.
+    pub line: u32,
+    /// Samples with this caller to callee step on the stack.
+    pub samples: u64,
 }
 
 /// Machine-readable next-step hint for AI agents.
@@ -1827,6 +2175,396 @@ mod tests {
         assert_eq!(
             importance_id("src/importance.tsx", "important", 5),
             "fallow:importance:38ee86d9",
+        );
+    }
+
+    // -- Runtime signal fields (cloud runtime-context v1 shape) -------------
+
+    /// A Finding whose signal fields copy one function row of a real cloud
+    /// runtime-context response. Paths, names, ids and SHAs are replaced by
+    /// neutral values; the shape and the numbers are as the cloud sent them.
+    const CLOUD_TRACKED_FINDING: &str = r#"{
+        "id": "fallow:prod:deadbeef",
+        "file": "src/services/api/client.ts",
+        "function": "execute",
+        "line": 570,
+        "verdict": "active",
+        "invocations": 867828,
+        "confidence": "high",
+        "evidence": {
+            "static_status": "used",
+            "test_coverage": "covered",
+            "v8_tracking": "tracked",
+            "observation_days": 30,
+            "deployments_observed": 1
+        },
+        "repo_path": "src/services/api/client.ts",
+        "covered_by_test": true,
+        "period_tracking_state": "called",
+        "branches": {
+            "state": "observed",
+            "ranges_total": 35,
+            "ranges_never_run": 9,
+            "never_run": [
+                {"start_line": 579, "start_column": 38, "end_line": 579, "end_column": 68, "kind": "block"},
+                {"start_line": 613, "start_column": 53, "end_line": 613, "end_column": 53, "kind": "implicit_else"}
+            ],
+            "never_run_truncated": false,
+            "function_calls": 867828
+        },
+        "performance": {
+            "cpu": {
+                "state": "tracked",
+                "self_ms_per_hour": 16375.12,
+                "total_ms_per_hour": 38001.36,
+                "share_of_process": 0.2945,
+                "samples": 14546
+            },
+            "browser": {
+                "state": "untracked",
+                "long_frame_ms_per_hour": null,
+                "forced_layout_ms_per_hour": null,
+                "entries": null,
+                "share_of_script_time": null
+            }
+        },
+        "errors": {"state": "tracked", "groups": 0, "events": 0, "top": null}
+    }"#;
+
+    /// The signal fields of an untracked cloud row: every count is null.
+    const CLOUD_UNTRACKED_SIGNALS: &str = r#"{
+        "repo_path": null,
+        "covered_by_test": null,
+        "period_tracking_state": "untracked",
+        "branches": {
+            "state": "untracked",
+            "ranges_total": null,
+            "ranges_never_run": null,
+            "never_run": [],
+            "never_run_truncated": false,
+            "function_calls": null
+        },
+        "performance": {
+            "cpu": {
+                "state": "untracked",
+                "self_ms_per_hour": null,
+                "total_ms_per_hour": null,
+                "share_of_process": null,
+                "samples": null
+            },
+            "browser": {
+                "state": "untracked",
+                "long_frame_ms_per_hour": null,
+                "forced_layout_ms_per_hour": null,
+                "entries": null,
+                "share_of_script_time": null
+            }
+        },
+        "errors": {"state": "untracked", "groups": null, "events": null, "top": null}
+    }"#;
+
+    /// An error state with a top group, in the shape of the cloud
+    /// `FunctionErrors` type (error-reads.ts) and `ErrorBreakdown` type.
+    const CLOUD_ERRORS_WITH_TOP: &str = r#"{
+        "state": "tracked",
+        "groups": 2,
+        "events": 17,
+        "top": {
+            "group_id": "f1808f7b96239c9e653a28a21316119d",
+            "type": "TypeError",
+            "message": "Cannot read properties of undefined (reading 'id')",
+            "count": 12,
+            "first_seen_sha": "0123456789abcdef0123456789abcdef01234567",
+            "trace_url": "https://traces.example.com/trace/4bf92f3577b34da6a3ce929d0e0e4736",
+            "sample_route": "GET /v1/items/:id",
+            "breakdown": {
+                "state": "partial",
+                "events": 10,
+                "routes": [
+                    {"route": "GET /v1/items/:id", "events": 8},
+                    {"route": null, "events": 1}
+                ],
+                "other": 1,
+                "withheld": 0,
+                "sources": {"uncaught": 0, "unhandled_rejection": 2, "captured": 3, "framework": 5},
+                "handled": {"handled": 3, "unhandled": 7}
+            }
+        }
+    }"#;
+
+    fn json_value(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn finding_reads_cloud_runtime_signals() {
+        let finding: Finding = serde_json::from_str(CLOUD_TRACKED_FINDING).unwrap();
+        assert_eq!(
+            finding.repo_path.as_deref(),
+            Some("src/services/api/client.ts")
+        );
+        assert_eq!(finding.covered_by_test, Some(true));
+        assert_eq!(finding.period_tracking_state, Some(TrackingState::Called));
+
+        let branches = finding.branches.as_ref().unwrap();
+        assert_eq!(branches.state, BranchUsageState::Observed);
+        assert_eq!(branches.ranges_never_run, Some(9));
+        assert_eq!(branches.never_run.len(), 2);
+        assert_eq!(branches.never_run[1].kind, BranchRangeKind::ImplicitElse);
+
+        let performance = finding.performance.as_ref().unwrap();
+        let cpu = performance.cpu.as_ref().unwrap();
+        assert_eq!(cpu.state, SignalState::Tracked);
+        assert_eq!(cpu.samples, Some(14546));
+        assert_eq!(cpu.self_ms_per_hour, Some(16375.12));
+        let browser = performance.browser.as_ref().unwrap();
+        assert_eq!(browser.state, SignalState::Untracked);
+        assert_eq!(browser.entries, None);
+
+        let errors = finding.errors.as_ref().unwrap();
+        assert_eq!(errors.state, ErrorState::Tracked);
+        assert_eq!(errors.events, Some(0));
+        assert!(errors.top.is_none());
+    }
+
+    #[test]
+    fn finding_cloud_runtime_signals_round_trip_exactly() {
+        let finding: Finding = serde_json::from_str(CLOUD_TRACKED_FINDING).unwrap();
+        let written = serde_json::to_value(&finding).unwrap();
+        let original = json_value(CLOUD_TRACKED_FINDING);
+        for key in [
+            "repo_path",
+            "covered_by_test",
+            "period_tracking_state",
+            "branches",
+            "performance",
+            "errors",
+        ] {
+            assert_eq!(
+                written[key], original[key],
+                "field {key} changed on round trip"
+            );
+        }
+    }
+
+    #[test]
+    fn untracked_cloud_signals_keep_their_nulls() {
+        let original = json_value(CLOUD_UNTRACKED_SIGNALS);
+        let branches: BranchUsage = serde_json::from_value(original["branches"].clone()).unwrap();
+        let performance: Performance =
+            serde_json::from_value(original["performance"].clone()).unwrap();
+        let errors: FunctionErrors = serde_json::from_value(original["errors"].clone()).unwrap();
+        let state: TrackingState =
+            serde_json::from_value(original["period_tracking_state"].clone()).unwrap();
+
+        assert_eq!(branches.state, BranchUsageState::Untracked);
+        assert_eq!(errors.state, ErrorState::Untracked);
+        assert_eq!(state, TrackingState::Untracked);
+        // Untracked is null, never zero: the nulls must survive the round trip.
+        assert_eq!(
+            serde_json::to_value(&branches).unwrap(),
+            original["branches"]
+        );
+        assert_eq!(
+            serde_json::to_value(&performance).unwrap(),
+            original["performance"]
+        );
+        assert_eq!(serde_json::to_value(&errors).unwrap(), original["errors"]);
+    }
+
+    #[test]
+    fn function_errors_with_top_group_round_trip_exactly() {
+        let errors: FunctionErrors = serde_json::from_str(CLOUD_ERRORS_WITH_TOP).unwrap();
+        let top = errors.top.as_ref().unwrap();
+        assert_eq!(top.error_type, "TypeError");
+        assert_eq!(top.sample_route.as_deref(), Some("GET /v1/items/:id"));
+        let breakdown = top.breakdown.as_ref().unwrap();
+        assert_eq!(breakdown.state, BreakdownState::Partial);
+        let routes = breakdown.routes.as_ref().unwrap();
+        assert_eq!(routes[1].route, None);
+        assert_eq!(breakdown.sources.as_ref().unwrap()["framework"], 5);
+        assert_eq!(breakdown.handled.as_ref().unwrap().unhandled, 7);
+        assert_eq!(
+            serde_json::to_value(&errors).unwrap(),
+            json_value(CLOUD_ERRORS_WITH_TOP)
+        );
+    }
+
+    #[test]
+    fn error_top_without_breakdown_or_sample_route_deserializes() {
+        // A cloud from before the breakdown and the sample route sends
+        // neither field.
+        let json = r#"{
+            "group_id": "abc",
+            "type": "Error",
+            "message": "boom",
+            "count": 1,
+            "first_seen_sha": null,
+            "trace_url": null
+        }"#;
+        let top: ErrorTop = serde_json::from_str(json).unwrap();
+        assert!(top.breakdown.is_none());
+        assert!(top.sample_route.is_none());
+    }
+
+    #[test]
+    fn finding_without_runtime_signals_omits_them() {
+        let json = r#"{
+            "id": "fallow:prod:deadbeef",
+            "file": "src/a.ts",
+            "function": "foo",
+            "line": 42,
+            "verdict": "active",
+            "invocations": 100,
+            "confidence": "high",
+            "evidence": {
+                "static_status": "used",
+                "test_coverage": "covered",
+                "v8_tracking": "tracked",
+                "observation_days": 30,
+                "deployments_observed": 14
+            }
+        }"#;
+        let finding: Finding = serde_json::from_str(json).unwrap();
+        assert!(finding.repo_path.is_none());
+        assert!(finding.covered_by_test.is_none());
+        assert!(finding.period_tracking_state.is_none());
+        assert!(finding.branches.is_none());
+        assert!(finding.performance.is_none());
+        assert!(finding.errors.is_none());
+
+        let written = serde_json::to_string(&finding).unwrap();
+        for key in [
+            "repo_path",
+            "covered_by_test",
+            "period_tracking_state",
+            "branches",
+            "performance",
+            "errors",
+        ] {
+            assert!(
+                !written.contains(key),
+                "{key} must be absent when None: {written}"
+            );
+        }
+    }
+
+    #[test]
+    fn finding_reads_null_performance_and_branches_as_none() {
+        // The cloud sends `performance: null` for a function without a
+        // stable id and `branches: null` when branch usage is off.
+        let mut value = json_value(CLOUD_TRACKED_FINDING);
+        value["performance"] = serde_json::Value::Null;
+        value["branches"] = serde_json::Value::Null;
+        let finding: Finding = serde_json::from_value(value).unwrap();
+        assert!(finding.performance.is_none());
+        assert!(finding.branches.is_none());
+    }
+
+    #[test]
+    fn blast_radius_entry_reads_production_callers() {
+        // `production_callers` copies a real cloud blast-radius row.
+        let json = r#"{
+            "id": "fallow:blast:e5c4cacc",
+            "file": "src/services/api/client.ts",
+            "function": "probeDatabase",
+            "line": 58,
+            "caller_count": 1,
+            "caller_count_weighted_by_traffic": 5209238,
+            "deploys_touched": 1,
+            "risk_band": "low",
+            "production_callers": [
+                {
+                    "stable_id": "fallow:fn:0123456789abcdef",
+                    "file": "src/routes/health.ts",
+                    "function": "runProbe",
+                    "line": 84,
+                    "samples": 1
+                }
+            ]
+        }"#;
+        let entry: BlastRadiusEntry = serde_json::from_str(json).unwrap();
+        let callers = entry.production_callers.as_ref().unwrap();
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].function, "runProbe");
+        assert_eq!(callers[0].samples, 1);
+        let written = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            written["production_callers"],
+            json_value(json)["production_callers"]
+        );
+    }
+
+    #[test]
+    fn blast_radius_entry_without_production_callers_omits_them() {
+        for json in [
+            r#"{"id":"fallow:blast:deadbeef","file":"src/a.ts","function":"foo","line":42,
+                "caller_count":10,"caller_count_weighted_by_traffic":5000,"risk_band":"high"}"#,
+            r#"{"id":"fallow:blast:deadbeef","file":"src/a.ts","function":"foo","line":42,
+                "caller_count":10,"caller_count_weighted_by_traffic":5000,"risk_band":"high",
+                "production_callers":null}"#,
+        ] {
+            let entry: BlastRadiusEntry = serde_json::from_str(json).unwrap();
+            assert!(entry.production_callers.is_none());
+            let written = serde_json::to_string(&entry).unwrap();
+            assert!(!written.contains("production_callers"), "{written}");
+        }
+    }
+
+    #[test]
+    fn runtime_signal_objects_allow_unknown_fields() {
+        let cpu: CpuUsage = serde_json::from_str(
+            r#"{"state":"tracked","self_ms_per_hour":1.0,"total_ms_per_hour":2.0,
+                "share_of_process":0.1,"samples":10,"future_field":true}"#,
+        )
+        .unwrap();
+        assert_eq!(cpu.samples, Some(10));
+        let caller: ProductionCaller = serde_json::from_str(
+            r#"{"stable_id":"fallow:fn:0123456789abcdef","file":"src/a.ts","function":"f",
+                "line":1,"samples":3,"future_field":1}"#,
+        )
+        .unwrap();
+        assert_eq!(caller.line, 1);
+    }
+
+    #[test]
+    fn unknown_runtime_signal_states_round_trip() {
+        let tracking: TrackingState = serde_json::from_str(r#""future_state""#).unwrap();
+        assert_eq!(tracking, TrackingState::Unknown);
+        let signal: SignalState = serde_json::from_str(r#""future_state""#).unwrap();
+        assert_eq!(signal, SignalState::Unknown);
+        let error: ErrorState = serde_json::from_str(r#""future_state""#).unwrap();
+        assert_eq!(error, ErrorState::Unknown);
+        let breakdown: BreakdownState = serde_json::from_str(r#""future_state""#).unwrap();
+        assert_eq!(breakdown, BreakdownState::Unknown);
+        let branches: BranchUsageState = serde_json::from_str(r#""future_state""#).unwrap();
+        assert_eq!(branches, BranchUsageState::Unknown);
+        let kind: BranchRangeKind = serde_json::from_str(r#""future_kind""#).unwrap();
+        assert_eq!(kind, BranchRangeKind::Unknown);
+    }
+
+    #[test]
+    fn never_run_range_without_kind_is_a_block() {
+        let range: NeverRunRange = serde_json::from_str(
+            r#"{"start_line":1,"start_column":0,"end_line":2,"end_column":4}"#,
+        )
+        .unwrap();
+        assert_eq!(range.kind, BranchRangeKind::Block);
+    }
+
+    #[test]
+    fn runtime_signal_states_use_snake_case() {
+        assert_eq!(
+            serde_json::from_str::<TrackingState>(r#""never_called""#).unwrap(),
+            TrackingState::NeverCalled
+        );
+        assert_eq!(
+            serde_json::from_str::<SignalState>(r#""insufficient""#).unwrap(),
+            SignalState::Insufficient
+        );
+        assert_eq!(
+            serde_json::to_string(&BranchRangeKind::ImplicitElse).unwrap(),
+            r#""implicit_else""#
         );
     }
 }
