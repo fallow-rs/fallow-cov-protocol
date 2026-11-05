@@ -66,6 +66,15 @@ cargo fmt --all -- --check                        # Formatting
 cargo doc --no-deps --document-private-items      # Docs (catches broken intra-doc links)
 ```
 
+## Write for the reader
+
+Write code comments, docs, commit messages, PR text, and changelog entries
+for a reader who did not see the session. Do not put the conversation, the
+prompt, discarded attempts, or the edit history into them. Describe the code
+as it is now. For a regression, state what breaks without the code, and link
+the issue. `scripts/check-comment-quality.mjs` blocks narration and history
+comments in CI, in the `.githooks/pre-push` hook, and in Claude edits.
+
 ## Git conventions
 
 - Conventional commits: `feat:`, `fix:`, `chore:`, `refactor:`, `test:`, `docs:`

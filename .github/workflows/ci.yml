@@ -44,6 +44,9 @@ jobs:
       - name: Check public documentation boundary
         run: node --test scripts/check-public-boundary.test.mjs && node scripts/check-public-boundary.mjs
 
+      - name: Check comments for edit history
+        run: node --test scripts/check-comment-quality.test.mjs && node scripts/check-comment-quality.mjs --all
+
       - name: Run tests
         run: cargo test --all-targets
 
