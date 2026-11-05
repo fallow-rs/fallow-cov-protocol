@@ -23,7 +23,7 @@ Once per clone, opt into the same gates locally:
 git config core.hooksPath .githooks
 ```
 
-`.githooks/pre-push` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `typos .` on every push. `RUN_TESTS=1 git push` also runs `cargo test`. `SKIP_PRE_PUSH=1 git push` bypasses it (use sparingly, e.g. WIP branches for early CI signal).
+`.githooks/pre-push` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `node scripts/check-comment-quality.mjs --all`, and `typos .` on every push. `RUN_TESTS=1 git push` also runs `cargo test`. `SKIP_PRE_PUSH=1 git push` bypasses it (use sparingly, e.g. WIP branches for early CI signal).
 
 ## Lint baseline
 

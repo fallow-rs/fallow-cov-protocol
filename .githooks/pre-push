@@ -43,6 +43,9 @@ cargo fmt --all --check
 echo "[pre-push] cargo clippy --all-targets -- -D warnings"
 cargo clippy --all-targets -- -D warnings
 
+echo "[pre-push] check comments for edit history"
+node scripts/check-comment-quality.mjs --all
+
 echo "[pre-push] typos ."
 if ! command -v typos >/dev/null 2>&1; then
   echo "  typos not installed, install with: cargo install typos-cli"
