@@ -5,6 +5,10 @@
 //! the sidecar, writes the request to stdin, and reads a [`Response`] from
 //! stdout. Both sides depend on this crate to guarantee contract alignment.
 //!
+//! User documentation for runtime coverage is on fallow.tools:
+//! [Runtime coverage](https://fallow.tools/docs/analysis/runtime-coverage/)
+//! and [`fallow coverage`](https://fallow.tools/docs/cli/coverage/).
+//!
 //! # Versioning
 //!
 //! The top-level `protocol_version` field is a full semver string. Major
