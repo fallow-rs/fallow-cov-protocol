@@ -150,10 +150,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned MSRV toolchain
+      - name: Install MSRV toolchain from Cargo.toml
         run: |
-          rustup toolchain install 1.96.0 --profile minimal
-          rustup override set 1.96.0
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test -n "$msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          rustup override set "$msrv"
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           key: msrv
